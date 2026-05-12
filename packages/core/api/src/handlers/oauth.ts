@@ -8,7 +8,7 @@ import { HttpApiBuilder } from "effect/unstable/httpapi";
 import { HttpServerResponse } from "effect/unstable/http";
 import { Effect, Option, Predicate, Schema } from "effect";
 
-import { runOAuthCallback } from "../oauth-popup";
+import { runOAuthCallback, type PopupErrorMessage } from "../oauth-popup";
 import {
   OAUTH_POPUP_MESSAGE_TYPE,
   OAuthCompleteError,
@@ -50,26 +50,36 @@ const decodeOAuthCompleteError = Schema.decodeUnknownOption(OAuthCompleteError);
 const decodeOAuthProbeError = Schema.decodeUnknownOption(OAuthProbeError);
 const decodeOAuthSessionNotFoundError = Schema.decodeUnknownOption(OAuthSessionNotFoundError);
 
-const getOAuthErrorMessage = <A extends { readonly message: string }>(
-  error: unknown,
-  decode: (input: unknown) => Option.Option<A>,
-): string | undefined =>
-  Option.match(decode(error), {
-    onNone: () => undefined,
-    onSome: (oauthError) => oauthError.message,
-  });
+const toPopupErrorMessage = (error: unknown): PopupErrorMessage => {
+  const completeError = decodeOAuthCompleteError(error);
+  if (Option.isSome(completeError))
+    return {
+      short: "Could not complete authentication",
+      details: completeError.value.message,
+    };
 
-const toPopupErrorMessage = (error: unknown): string => {
-  const message =
-    getOAuthErrorMessage(error, decodeOAuthStartError) ??
-    getOAuthErrorMessage(error, decodeOAuthCompleteError) ??
-    getOAuthErrorMessage(error, decodeOAuthProbeError);
-  if (message) return message;
+  const startError = decodeOAuthStartError(error);
+  if (Option.isSome(startError))
+    return {
+      short: "Could not start authentication",
+      details: startError.value.message,
+    };
+
+  const probeError = decodeOAuthProbeError(error);
+  if (Option.isSome(probeError))
+    return {
+      short: "Could not discover authentication endpoint",
+      details: probeError.value.message,
+    };
 
   const sessionNotFound = decodeOAuthSessionNotFoundError(error);
   if (Option.isSome(sessionNotFound))
-    return `OAuth session not found: ${sessionNotFound.value.sessionId}`;
-  return "Authentication failed";
+    return {
+      short: "OAuth session expired or not found",
+      details: `Session id: ${sessionNotFound.value.sessionId}`,
+    };
+
+  return { short: "Authentication failed" };
 };
 
 const requireMatchingTokenScope = (
@@ -78,7 +88,11 @@ const requireMatchingTokenScope = (
 ): Effect.Effect<void, OAuthStartError> =>
   routeScope === tokenScope
     ? Effect.void
-    : Effect.fail(new OAuthStartError({ message: "OAuth token scope must match route scope" }));
+    : Effect.fail(
+        new OAuthStartError({
+          message: "OAuth token scope must match route scope",
+        }),
+      );
 
 export const OAuthHandlers = HttpApiBuilder.group(ExecutorApi, "oauth", (handlers) =>
   handlers
@@ -150,7 +164,9 @@ export const OAuthHandlers = HttpApiBuilder.group(ExecutorApi, "oauth", (handler
       capture(
         Effect.gen(function* () {
           if (path.scopeId !== payload.tokenScope) {
-            return yield* new OAuthSessionNotFoundError({ sessionId: payload.sessionId });
+            return yield* new OAuthSessionNotFoundError({
+              sessionId: payload.sessionId,
+            });
           }
           const executor = yield* ExecutorService;
           yield* executor.oauth.cancel(payload.sessionId, payload.tokenScope);
@@ -175,9 +191,6 @@ export const OAuthHandlers = HttpApiBuilder.group(ExecutorApi, "oauth", (handler
                 .pipe(
                   Effect.tapError((cause) =>
                     Effect.logError("OAuth callback completion failed", cause),
-                  ),
-                  Effect.catchCause(() =>
-                    Effect.fail(new OAuthCompleteError({ message: "Authentication failed" })),
                   ),
                 ),
             urlParams,

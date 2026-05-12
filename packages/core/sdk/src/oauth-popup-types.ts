@@ -19,7 +19,10 @@ export type OAuthPopupResult<TAuth> =
       readonly type: typeof OAUTH_POPUP_MESSAGE_TYPE;
       readonly ok: false;
       readonly sessionId: string | null;
+      /** Short user-facing summary. */
       readonly error: string;
+      /** Full technical detail. Omitted when identical to `error`. */
+      readonly errorDetails?: string;
     };
 
 export const isOAuthPopupResult = <TAuth>(value: unknown): value is OAuthPopupResult<TAuth> =>

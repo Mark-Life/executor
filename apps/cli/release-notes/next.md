@@ -11,3 +11,7 @@ Two regressions kept `executor.jsonc` and the runtime DB from agreeing on which 
 ### Variadic tool path arguments no longer crash
 
 Calling a tool with multiple positional path arguments (`executor <tool> path/a path/b ...`) no longer panics in the CLI argument parser. Thanks @grfwings (#761)
+
+### OAuth popup surfaces the real callback error
+
+OAuth callback failures previously rendered a hardcoded `"Authentication failed"`, hiding the actual cause behind a generic placeholder. The popup now shows a short tag-derived headline plus the full technical message inside a collapsible `<details>` disclosure, and skips auto-close on failure so users can read and act on the error. Thanks @Mark-Life (#774)
