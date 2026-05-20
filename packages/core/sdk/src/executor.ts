@@ -5,6 +5,7 @@ import {
   Layer,
   Match,
   Option,
+  Predicate,
   Result,
   Schema,
   Semaphore,
@@ -28,6 +29,7 @@ import {
 } from "./fuma-runtime";
 
 import { makeFumaBlobStore, pluginBlobStore } from "./blob";
+import { coreToolsPlugin } from "./core-tools";
 import {
   ConnectionProviderState,
   ConnectionRef,
@@ -110,6 +112,7 @@ import type {
   Elicit,
   PluginCtx,
   PluginExtensions,
+  SourceConfigureSchema,
   StaticSourceDecl,
   StaticToolDecl,
   StaticToolSchema,
@@ -410,6 +413,20 @@ export interface ExecutorConfig<TPlugins extends readonly AnyPlugin[] = readonly
     readonly timeout?: Duration.Input;
     readonly hostedOutboundPolicy?: boolean;
   };
+  /**
+   * Enable the built-in `core-tools` plugin which contributes
+   * agent-facing static tools (`scopes.list`, `secrets.list`,
+   * `secrets.create`). The `webBaseUrl` is where the executor's web
+   * UI lives; `secrets.create` builds a URL elicitation that points
+   * the user at `${webBaseUrl}/secrets?...` so the plaintext value
+   * never crosses the agent.
+   *
+   * Omit to skip registration (tests, MCP-only hosts that don't
+   * surface a web UI, etc.).
+   */
+  readonly coreTools?: {
+    readonly webBaseUrl: string;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -562,20 +579,58 @@ const toToolJsonSchema = (
   });
 };
 
+const toConfigureJsonSchema = (
+  schema: StaticToolSchema | Schema.Decoder<unknown, never> | undefined,
+): unknown => {
+  if (schema == null) return undefined;
+  const standard = schema as {
+    readonly "~standard"?: {
+      readonly validate?: unknown;
+      readonly jsonSchema?: StaticToolSchema["~standard"]["jsonSchema"];
+    };
+  };
+  if (typeof standard["~standard"]?.validate !== "function") {
+    const jsonSchema = Schema.toStandardSchemaV1(
+      Schema.toStandardJSONSchemaV1(schema as Schema.Decoder<unknown, never>) as never,
+    ) as StaticToolSchema;
+    return toToolJsonSchema(jsonSchema);
+  }
+  return standard["~standard"].jsonSchema?.input({
+    target: "draft-2020-12",
+  });
+};
+
 const decodeConfigureInput = (
   schema: StaticToolSchema | Schema.Decoder<unknown, never> | undefined,
   input: unknown,
 ): Effect.Effect<unknown, unknown> => {
   if (schema == null) return Effect.succeed(input);
-  if (!("~standard" in schema)) {
-    return Schema.decodeUnknownEffect(schema)(input);
+  const standard = schema as {
+    readonly "~standard"?: { readonly validate?: unknown };
+  };
+  if (standard["~standard"] === undefined || typeof standard["~standard"].validate !== "function") {
+    return Schema.decodeUnknownEffect(schema as Schema.Decoder<unknown, never>)(input);
   }
-  return Effect.promise(() => Promise.resolve(schema["~standard"].validate(input))).pipe(
-    Effect.flatMap((result) =>
-      "value" in result ? Effect.succeed(result.value) : Effect.fail(result),
-    ),
+  return Effect.promise(() =>
+    Promise.resolve((standard["~standard"]!.validate as (input: unknown) => unknown)(input)),
+  ).pipe(
+    Effect.flatMap((result) => {
+      const validationResult = result as { readonly value?: unknown };
+      return "value" in validationResult
+        ? Effect.succeed(validationResult.value)
+        : Effect.fail(result);
+    }),
   );
 };
+
+const sourceConfigureSchemaView = (
+  pluginId: string,
+  configure: NonNullable<AnyPlugin["sourceConfigure"]>,
+): SourceConfigureSchema => ({
+  pluginId,
+  type: configure.type,
+  schema: toConfigureJsonSchema(configure.schema),
+});
 
 const EXECUTOR_SOURCE_ID = "executor";
 const EXECUTOR_SOURCE: StaticSourceDecl = {
@@ -1031,7 +1086,25 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
       const empty: readonly AnyPlugin[] = [];
       return empty as TPlugins;
     };
-    const { scopes, plugins = defaultPlugins() } = config;
+    const { scopes, plugins: userPlugins = defaultPlugins() } = config;
+
+    if (scopes.length === 0) {
+      return yield* new StorageError({
+        message: "createExecutor requires a non-empty scopes array",
+        cause: undefined,
+      });
+    }
+
+    // Built-in core-tools plugin: contributes scopes.list / secrets.list /
+    // secrets.create static tools so agents can manage executor primitives
+    // without the host wiring it explicitly. Opt-in via `coreTools` config.
+    const plugins: readonly AnyPlugin[] = config.coreTools
+      ? ([
+          coreToolsPlugin({ webBaseUrl: config.coreTools.webBaseUrl }),
+          ...userPlugins,
+        ] as readonly AnyPlugin[])
+      : (userPlugins as readonly AnyPlugin[]);
+
     const tables = yield* Effect.try({
       try: () => collectTables(plugins),
       catch: (cause) => storageFailureFromUnknown("Failed to collect executor tables", cause),
@@ -1051,14 +1124,6 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
       },
       catch: (cause) => storageFailureFromUnknown("Failed to validate executor tables", cause),
     });
-
-    if (scopes.length === 0) {
-      return yield* new StorageError({
-        message: "createExecutor requires a non-empty scopes array",
-        cause: undefined,
-      });
-    }
-
     const scopeIds = scopes.map((s) => String(s.id));
     const rootDb = withQueryContext(rootDbUntyped, {
       allowedScopeIds: new Set(scopeIds),
@@ -1661,6 +1726,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
         const list = yield* secretsList();
         return list.map((ref) => ({
           id: String(ref.id),
+          scopeId: ref.scopeId,
           name: ref.name,
           provider: ref.provider,
         }));
@@ -3051,6 +3117,36 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
                   },
                 })
                 .pipe(Effect.asVoid),
+            list: () => listSources(),
+            remove: (input) => removeSource(input),
+            refresh: (input) => refreshSource(input),
+            detect: (url) => detectSource(url),
+            configure: (input) => sourceConfigure(input),
+            listBindings: (input) => sourceBindingList(input),
+            resolveBinding: (input) => sourceBindingResolve(input),
+            setBinding: (input) => sourceBindingSet(input),
+            removeBinding: (input) => sourceBindingRemove(input),
+            configureSchemas: () =>
+              Array.from(runtimes.values())
+                .map(({ plugin }) =>
+                  plugin.sourceConfigure
+                    ? sourceConfigureSchemaView(plugin.id, plugin.sourceConfigure)
+                    : undefined,
+                )
+                .filter(Predicate.isNotUndefined),
+            presets: () =>
+              Array.from(runtimes.values()).flatMap(({ plugin }) =>
+                (plugin.sourcePresets ?? []).map((preset) => ({
+                  ...preset,
+                  pluginId: plugin.id,
+                })),
+              ),
+          },
+          policies: {
+            list: () => policiesList(),
+            create: (input) => policiesCreate(input),
+            update: (input) => policiesUpdate(input),
+            remove: (input) => policiesRemove(input),
           },
           definitions: {
             register: (input: DefinitionsInput) =>
@@ -3061,6 +3157,10 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           get: (id) => secretsGet(id),
           getAtScope: (id, scope) => secretsGetAtScope(id, scope),
           list: () => secretsListForCtx(),
+          status: (id) => secretsStatus(id),
+          usages: (id) => secretsUsages(id),
+          providers: () =>
+            Effect.sync(() => Array.from(secretProviders.keys()) as readonly string[]),
           set: (input) => secretsSet(input),
           remove: (input) => secretsRemove(input),
         },
@@ -3068,6 +3168,9 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           get: (id) => connectionsGet(id),
           getAtScope: (id, scope) => connectionsGetAtScope(id, scope),
           list: () => connectionsListForCtx(),
+          usages: (id) => connectionsUsages(id),
+          providers: () =>
+            Effect.sync(() => Array.from(connectionProviders.keys()) as readonly string[]),
           create: (input) => connectionsCreate(input),
           updateTokens: (input) => connectionsUpdateTokens(input),
           setIdentityLabel: (id, label) => connectionsSetIdentityLabel(id, label),
@@ -3092,11 +3195,14 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
       // Resolve static declarations to the in-memory pools. NO DB WRITES.
       // Plugin-owned executor tools are intentionally mounted under the
       // single `executor` namespace so source inventory is about configured
-      // integrations, not plugin management surfaces:
+      // integrations, not plugin management surfaces. The static source id
+      // becomes the path segment, so plugins can expose TypeScript-friendly
+      // management namespaces without changing their persisted plugin ids:
       //   openapi.addSource -> executor.openapi.addSource
+      //   googleDiscovery.addSource -> executor.googleDiscovery.addSource
       const decls = plugin.staticSources ? plugin.staticSources(extension) : [];
       for (const source of decls) {
-        const mountUnderExecutor = source.kind === "executor" && source.id === plugin.id;
+        const mountUnderExecutor = source.kind === "executor";
         const mountedSource = mountUnderExecutor ? EXECUTOR_SOURCE : source;
 
         if (mountUnderExecutor) {
@@ -3120,7 +3226,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           const mountedTool = mountUnderExecutor
             ? {
                 ...tool,
-                name: `${plugin.id}.${tool.name}`,
+                name: `${source.id}.${tool.name}`,
               }
             : tool;
           const fqid = `${mountedSource.id}.${mountedTool.name}`;

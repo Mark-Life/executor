@@ -41,7 +41,7 @@ export { StorageError, UniqueViolationError, isStorageFailure } from "./fuma-run
 export { ScopeId, ToolId, SecretId, PolicyId, ConnectionId, CredentialBindingId } from "./ids";
 
 // Scope
-export { Scope } from "./scope";
+export { Scope, defaultSourceInstallScopeId } from "./scope";
 
 // Errors (tagged)
 export {
@@ -293,6 +293,7 @@ export {
   type StorageDeps,
   type StaticSourceDecl,
   type StaticToolDecl,
+  type StaticToolSchema,
   type StaticToolExecuteContext,
   type StaticToolHandlerInput,
   type StaticToolInput,
@@ -327,6 +328,12 @@ export {
   createExecutor,
   collectTables,
 } from "./executor";
+
+// Built-in core-tools plugin (scopes.list, secrets.list, secrets.create
+// with URL elicitation). Auto-registered by createExecutor when
+// `coreTools` is set on the config; also exportable for callers who
+// want to register it manually.
+export { coreToolsPlugin, type CoreToolsPluginOptions } from "./core-tools";
 
 // CLI / runtime config
 export {

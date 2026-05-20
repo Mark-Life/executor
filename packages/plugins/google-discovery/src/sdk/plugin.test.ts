@@ -425,6 +425,24 @@ describe("Google Discovery plugin", () => {
       });
 
       expect(result.toolCount).toBe(2);
+      expect((yield* executor.tools.list()).map((tool) => tool.id)).toEqual(
+        expect.arrayContaining([
+          "executor.googleDiscovery.probeDiscovery",
+          "executor.googleDiscovery.addSource",
+          "executor.googleDiscovery.getSource",
+          "executor.googleDiscovery.configureSource",
+        ]),
+      );
+
+      const inspected = yield* executor.tools.invoke(
+        "executor.googleDiscovery.getSource",
+        { namespace: "drive", scope: "test-scope" },
+        autoApprove,
+      );
+      expect(inspected).toMatchObject({
+        ok: true,
+        data: { source: { namespace: "drive", scope: "test-scope" } },
+      });
 
       const invocation = (yield* executor.tools.invoke(
         "drive.files.get",

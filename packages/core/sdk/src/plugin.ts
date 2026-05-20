@@ -14,9 +14,17 @@ import type {
   RemoveConnectionInput,
   UpdateConnectionTokensInput,
 } from "./connections";
-import type { CredentialBindingsFacade } from "./credential-bindings";
+import type {
+  CredentialBindingRef,
+  CredentialBindingsFacade,
+  RemoveSourceCredentialBindingInput,
+  SetSourceCredentialBindingInput,
+  SourceCredentialBindingSlotInput,
+  SourceCredentialBindingSourceInput,
+} from "./credential-bindings";
 import type { DefinitionsInput, SourceInput, ToolAnnotations, ToolRow } from "./core-schema";
-import type { RemoveSourceInput, SourceDetectionResult } from "./types";
+import type { ScopeId } from "./ids";
+import type { RefreshSourceInput, RemoveSourceInput, Source, SourceDetectionResult } from "./types";
 import type {
   ElicitationDeclinedError,
   ElicitationHandler,
@@ -31,9 +39,16 @@ import type {
   ConnectionRefreshNotSupportedError,
   SecretInUseError,
   SecretOwnedByConnectionError,
+  SourceRemovalNotAllowedError,
 } from "./errors";
 import type { OAuthService } from "./oauth";
 import type { PluginStorageFacade } from "./plugin-storage";
+import type {
+  CreateToolPolicyInput,
+  RemoveToolPolicyInput,
+  ToolPolicy,
+  UpdateToolPolicyInput,
+} from "./policies";
 import type { Scope } from "./scope";
 import type { RemoveSecretInput, SecretProvider, SecretRef, SetSecretInput } from "./secrets";
 import type { Usage, UsagesForConnectionInput, UsagesForSecretInput } from "./usages";
@@ -99,6 +114,47 @@ export interface PluginCtx<TStore = unknown> {
         readonly name?: string;
         readonly url?: string | null;
       }) => Effect.Effect<void, StorageFailure>;
+      readonly list: () => Effect.Effect<readonly Source[], StorageFailure>;
+      readonly remove: (
+        input: RemoveSourceInput,
+      ) => Effect.Effect<void, SourceRemovalNotAllowedError | StorageFailure>;
+      readonly refresh: (input: RefreshSourceInput) => Effect.Effect<void, StorageFailure>;
+      readonly detect: (
+        url: string,
+      ) => Effect.Effect<readonly SourceDetectionResult[], StorageFailure>;
+      readonly configure: (input: {
+        readonly source: {
+          readonly id: string;
+          readonly scope: ScopeId | string;
+        };
+        readonly scope: ScopeId | string;
+        readonly type?: string;
+        readonly config: unknown;
+      }) => Effect.Effect<unknown, StorageFailure>;
+      readonly listBindings: (
+        input: SourceCredentialBindingSourceInput,
+      ) => Effect.Effect<readonly CredentialBindingRef[], StorageFailure>;
+      readonly resolveBinding: (
+        input: SourceCredentialBindingSlotInput,
+      ) => Effect.Effect<CredentialBindingRef | null, StorageFailure>;
+      readonly setBinding: (
+        input: SetSourceCredentialBindingInput,
+      ) => Effect.Effect<CredentialBindingRef, StorageFailure>;
+      readonly removeBinding: (
+        input: RemoveSourceCredentialBindingInput,
+      ) => Effect.Effect<void, StorageFailure>;
+      /** Source configuration declarations for every plugin that
+       *  supports `executor.sources.configure`. Exposed to core tools
+       *  so agent-facing configuration surfaces can describe the
+       *  plugin-specific payload shape before dispatching a write. */
+      readonly configureSchemas: () => readonly SourceConfigureSchema[];
+      readonly presets: () => readonly SourcePresetCatalogEntry[];
+    };
+    readonly policies: {
+      readonly list: () => Effect.Effect<readonly ToolPolicy[], StorageFailure>;
+      readonly create: (input: CreateToolPolicyInput) => Effect.Effect<ToolPolicy, StorageFailure>;
+      readonly update: (input: UpdateToolPolicyInput) => Effect.Effect<ToolPolicy, StorageFailure>;
+      readonly remove: (input: RemoveToolPolicyInput) => Effect.Effect<void, StorageFailure>;
     };
     /** Register shared JSON-schema `$defs` for a source. Tool
      *  input/output schemas registered via `sources.register` can carry
@@ -123,9 +179,17 @@ export interface PluginCtx<TStore = unknown> {
      *  `owned_by_connection_id` set) are filtered out so they don't
      *  clutter the UI — users see the Connection instead. */
     readonly list: () => Effect.Effect<
-      readonly { readonly id: string; readonly name: string; readonly provider: string }[],
+      readonly {
+        readonly id: string;
+        readonly scopeId: ScopeId;
+        readonly name: string;
+        readonly provider: string;
+      }[],
       StorageFailure
     >;
+    readonly status: (id: string) => Effect.Effect<"resolved" | "missing", StorageFailure>;
+    readonly usages: (id: string) => Effect.Effect<readonly Usage[], StorageFailure>;
+    readonly providers: () => Effect.Effect<readonly string[], never>;
     /** Write a secret value through a provider. Used by plugins that
      *  mint secrets on behalf of the user (OAuth2 token storage,
      *  interactive onboarding flows). Normally writes go through
@@ -156,6 +220,8 @@ export interface PluginCtx<TStore = unknown> {
       scope: string,
     ) => Effect.Effect<ConnectionRef | null, StorageFailure>;
     readonly list: () => Effect.Effect<readonly ConnectionRef[], StorageFailure>;
+    readonly usages: (id: string) => Effect.Effect<readonly Usage[], StorageFailure>;
+    readonly providers: () => Effect.Effect<readonly string[], never>;
     readonly create: (
       input: CreateConnectionInput,
     ) => Effect.Effect<ConnectionRef, ConnectionProviderNotRegisteredError | StorageFailure>;
@@ -371,6 +437,30 @@ export interface SourceConfigureDecl<TStore = unknown> {
   ) => Effect.Effect<unknown, unknown>;
 }
 
+export interface SourceConfigureSchema {
+  readonly pluginId: string;
+  readonly type: string;
+  readonly schema?: unknown;
+}
+
+export interface SourcePreset {
+  readonly id: string;
+  readonly name: string;
+  readonly summary: string;
+  readonly url?: string;
+  readonly endpoint?: string;
+  readonly icon?: string;
+  readonly featured?: boolean;
+  readonly transport?: "remote" | "stdio";
+  readonly command?: string;
+  readonly args?: readonly string[];
+  readonly env?: Readonly<Record<string, string>>;
+}
+
+export interface SourcePresetCatalogEntry extends SourcePreset {
+  readonly pluginId: string;
+}
+
 // ---------------------------------------------------------------------------
 // PluginSpec — what a `definePlugin(factory)` call returns.
 // ---------------------------------------------------------------------------
@@ -431,6 +521,12 @@ export interface PluginSpec<
    *  with no runtime fetch and no parallel client-side flag to keep in
    *  sync. */
   readonly clientConfig?: unknown;
+
+  /** Source presets shown by the web UI's "Popular sources" list and
+   *  exposed through core tools for agents. Keep this server-safe:
+   *  no React components, only JSON-serializable metadata and optional
+   *  add-flow hints such as URL or stdio command. */
+  readonly sourcePresets?: readonly SourcePreset[];
 
   /** Build the plugin's extension API. The returned object becomes
    *  `executor[plugin.id]` and is also the `self` passed to

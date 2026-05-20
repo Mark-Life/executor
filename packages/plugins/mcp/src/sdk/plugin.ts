@@ -21,9 +21,12 @@ import {
   ScopeId,
   SourceDetectionResult,
   ToolResult,
+  defaultSourceInstallScopeId,
   definePlugin,
+  tool,
   resolveSecretBackedMap as resolveSharedSecretBackedMap,
   type PluginCtx,
+  type StaticToolSchema,
   type StorageFailure,
   StorageError,
   type ToolAnnotations,
@@ -46,19 +49,22 @@ import { discoverTools } from "./discover";
 import { McpConnectionError, McpInvocationError, McpToolDiscoveryError } from "./errors";
 import { invokeMcpTool } from "./invoke";
 import { deriveMcpNamespace, type McpToolManifest, type McpToolManifestEntry } from "./manifest";
+import { mcpPresets } from "./presets";
 import { probeMcpEndpointShape, type McpShapeProbeResult } from "./probe-shape";
 import {
   MCP_OAUTH_CLIENT_ID_SLOT,
   MCP_OAUTH_CLIENT_SECRET_SLOT,
   MCP_OAUTH_CONNECTION_SLOT,
   McpConnectionAuthInput,
+  McpConfiguredValueInput,
   McpCredentialInput,
+  McpRemoteTransport,
   McpToolBinding,
   mcpHeaderSlot,
   mcpQueryParamSlot,
   type McpConnectionAuth,
   type McpConfiguredValueInput as McpConfiguredValueInputType,
-  type SecretBackedValue,
+  SecretBackedValue,
   type McpStoredSourceData,
   type ConfiguredMcpCredentialValue,
 } from "./types";
@@ -157,11 +163,122 @@ const McpInitialCredentialsInputSchema = Schema.Struct({
 });
 type McpInitialCredentialsInput = typeof McpInitialCredentialsInputSchema.Type;
 
-export interface McpProbeEndpointInput {
-  readonly endpoint: string;
-  readonly headers?: Record<string, SecretBackedValue>;
-  readonly queryParams?: Record<string, SecretBackedValue>;
-}
+const McpRemoteAddSourceInputSchema = Schema.Struct({
+  transport: Schema.Literal("remote"),
+  name: Schema.String,
+  endpoint: Schema.String,
+  remoteTransport: Schema.optional(McpRemoteTransport),
+  queryParams: Schema.optional(Schema.Record(Schema.String, McpConfiguredValueInput)),
+  headers: Schema.optional(Schema.Record(Schema.String, McpConfiguredValueInput)),
+  namespace: Schema.optional(Schema.String),
+  oauth2: Schema.optional(OAuth2SourceConfig),
+  credentials: Schema.optional(McpInitialCredentialsInputSchema),
+});
+
+const McpStdioAddSourceInputSchema = Schema.Struct({
+  transport: Schema.Literal("stdio"),
+  name: Schema.String,
+  command: Schema.String,
+  args: Schema.optional(Schema.Array(Schema.String)),
+  env: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  cwd: Schema.optional(Schema.String),
+  namespace: Schema.optional(Schema.String),
+});
+
+const McpAddSourceInputSchema = Schema.Union([
+  McpRemoteAddSourceInputSchema,
+  McpStdioAddSourceInputSchema,
+]);
+
+const McpAddSourceOutputSchema = Schema.Struct({
+  namespace: Schema.String,
+  source: Schema.Struct({
+    id: Schema.String,
+    scope: Schema.String,
+  }),
+  toolCount: Schema.Number,
+  discovery: Schema.optional(
+    Schema.Struct({
+      status: Schema.Literals(["ok", "failed"]),
+      message: Schema.optional(Schema.String),
+      stage: Schema.optional(Schema.String),
+    }),
+  ),
+});
+
+const McpProbeEndpointInputSchema = Schema.Struct({
+  endpoint: Schema.String,
+  headers: Schema.optional(Schema.Record(Schema.String, SecretBackedValue)),
+  queryParams: Schema.optional(Schema.Record(Schema.String, SecretBackedValue)),
+});
+
+const McpProbeEndpointOutputSchema = Schema.Struct({
+  connected: Schema.Boolean,
+  requiresOAuth: Schema.Boolean,
+  supportsDynamicRegistration: Schema.Boolean,
+  name: Schema.String,
+  namespace: Schema.String,
+  toolCount: Schema.NullOr(Schema.Number),
+  serverName: Schema.NullOr(Schema.String),
+});
+
+const McpGetSourceInputSchema = Schema.Struct({
+  namespace: Schema.String,
+  scope: Schema.String,
+});
+
+const McpGetSourceOutputSchema = Schema.Struct({
+  source: Schema.NullOr(Schema.Unknown),
+});
+
+const McpStaticConfigureSourceInputSchema = Schema.Struct({
+  source: Schema.Struct({
+    id: Schema.String,
+    scope: Schema.String,
+  }),
+  scope: Schema.String,
+  ...McpConfigureSourcePayloadSchema.fields,
+});
+
+const McpStaticConfigureSourceOutputSchema = Schema.Struct({
+  configured: Schema.Boolean,
+});
+
+const schemaToStaticToolSchema = <A, I>(schema: Schema.Decoder<A, I>): StaticToolSchema<A, I> =>
+  Schema.toStandardSchemaV1(Schema.toStandardJSONSchemaV1(schema) as never) as StaticToolSchema<
+    A,
+    I
+  >;
+
+const mcpToolFailure = (code: string, message: string, details?: unknown) =>
+  ToolResult.fail({
+    code,
+    message,
+    ...(details === undefined ? {} : { details }),
+  });
+
+const McpAddSourceInputStandardSchema = schemaToStaticToolSchema(McpAddSourceInputSchema);
+const McpAddSourceOutputStandardSchema = schemaToStaticToolSchema(McpAddSourceOutputSchema);
+const McpProbeEndpointInputStandardSchema = schemaToStaticToolSchema(McpProbeEndpointInputSchema);
+const McpProbeEndpointOutputStandardSchema = schemaToStaticToolSchema(McpProbeEndpointOutputSchema);
+const McpGetSourceInputStandardSchema = schemaToStaticToolSchema(McpGetSourceInputSchema);
+const McpGetSourceOutputStandardSchema = schemaToStaticToolSchema(McpGetSourceOutputSchema);
+const McpStaticConfigureSourceInputStandardSchema = schemaToStaticToolSchema(
+  McpStaticConfigureSourceInputSchema,
+);
+const McpStaticConfigureSourceOutputStandardSchema = schemaToStaticToolSchema(
+  McpStaticConfigureSourceOutputSchema,
+);
+
+export type McpProbeEndpointInput = typeof McpProbeEndpointInputSchema.Type;
+
+const resolveStaticScopeInput = (
+  ctx: { readonly scopes: readonly { readonly id: ScopeId; readonly name: string }[] },
+  value: string,
+): string =>
+  String(
+    ctx.scopes.find((scope) => scope.name === value || String(scope.id) === value)?.id ?? value,
+  );
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1001,6 +1118,17 @@ export const mcpPlugin = definePlugin((options?: McpPluginOptions) => {
   return {
     id: "mcp" as const,
     packageName: "@executor-js/plugin-mcp",
+    sourcePresets: allowStdio
+      ? mcpPresets.map((preset) => ({
+          ...preset,
+          transport: "transport" in preset ? preset.transport : "remote",
+        }))
+      : mcpPresets
+          .filter((preset) => !("transport" in preset && preset.transport === "stdio"))
+          .map((preset) => ({
+            ...preset,
+            transport: "remote" as const,
+          })),
     // Surfaced to the client bundle via the Vite plugin (see
     // `@executor-js/vite-plugin`). The MCP `./client` factory reads
     // `allowStdio` and gates the stdio tab + presets in AddMcpSource —
@@ -1578,6 +1706,175 @@ export const mcpPlugin = definePlugin((options?: McpPluginOptions) => {
           }
         }),
     },
+
+    staticSources: (self) => [
+      {
+        id: "mcp",
+        kind: "executor",
+        name: "MCP",
+        tools: [
+          tool({
+            name: "probeEndpoint",
+            description:
+              "Probe a remote MCP endpoint before adding it. If the result requires OAuth, call `executor.coreTools.oauth.probe` and `executor.coreTools.oauth.start` with `credentialScope` set to the user's chosen personal or organization credential scope first, then pass the resulting connection through `addSource` credentials or `mcp.configureSource`.",
+            inputSchema: McpProbeEndpointInputStandardSchema,
+            outputSchema: McpProbeEndpointOutputStandardSchema,
+            execute: (input) =>
+              self.probeEndpoint(input).pipe(
+                Effect.map(ToolResult.ok),
+                Effect.catchTag("McpConnectionError", ({ message, transport }) =>
+                  Effect.succeed(mcpToolFailure("mcp_connection_failed", message, { transport })),
+                ),
+              ),
+          }),
+          tool({
+            name: "getSource",
+            description:
+              "Inspect an existing MCP source, including transport, endpoint/command, auth mode, configured headers/query params, and credential slots. Use this before repairing an existing source with `mcp.configureSource`, `secrets.create`, or `oauth.start`.",
+            inputSchema: McpGetSourceInputStandardSchema,
+            outputSchema: McpGetSourceOutputStandardSchema,
+            execute: (input, { ctx }) => {
+              const args = input as typeof McpGetSourceInputSchema.Type;
+              return Effect.map(
+                self.getSource(args.namespace, resolveStaticScopeInput(ctx, args.scope)),
+                (source) => ToolResult.ok({ source }),
+              );
+            },
+          }),
+          tool({
+            name: "addSource",
+            description:
+              "Add an MCP source and register its tools. Executor chooses the source install scope (local scope locally, organization scope in cloud) and returns it as `source`. For remote OAuth-protected servers, first use `probeEndpoint` and the core OAuth browser handoff (`oauth.probe`, `oauth.start` with the user's chosen `credentialScope`), then bind the completed connection with `mcp.configureSource` if needed. For header/API-key auth, first call `secrets.create` at the user's chosen credential scope so the value is entered in the browser, then pass the secret reference in `credentials`. Remote sources are still saved if discovery fails; inspect the returned `discovery` field and use `sources.refresh` after credentials or network access are fixed.",
+            annotations: {
+              requiresApproval: true,
+              approvalDescription: "Add an MCP source",
+            },
+            inputSchema: McpAddSourceInputStandardSchema,
+            outputSchema: McpAddSourceOutputStandardSchema,
+            execute: (rawInput, { ctx }) => {
+              const input = rawInput as typeof McpAddSourceInputSchema.Type;
+              const sourceScope = defaultSourceInstallScopeId(ctx.scopes);
+              if (sourceScope === null) {
+                return Effect.succeed(
+                  mcpToolFailure(
+                    "source_scope_unavailable",
+                    "Cannot add an MCP source because this executor has no source install scope.",
+                  ),
+                );
+              }
+              const normalizedInput = {
+                ...input,
+                scope: sourceScope,
+              } as McpSourceConfig;
+              const added = self.addSource(normalizedInput).pipe(
+                Effect.map((result) =>
+                  ToolResult.ok({
+                    ...result,
+                    source: { id: result.namespace, scope: sourceScope },
+                    discovery: { status: "ok" },
+                  }),
+                ),
+              );
+              if (normalizedInput.transport !== "remote") return added;
+
+              const savedWithDiscoveryFailure = (failure: {
+                readonly message: string;
+                readonly stage?: string;
+              }) =>
+                Effect.succeed(
+                  ToolResult.ok({
+                    namespace:
+                      normalizedInput.namespace ??
+                      deriveMcpNamespace({
+                        name: normalizedInput.name,
+                        endpoint: normalizedInput.endpoint,
+                      }),
+                    source: {
+                      id:
+                        normalizedInput.namespace ??
+                        deriveMcpNamespace({
+                          name: normalizedInput.name,
+                          endpoint: normalizedInput.endpoint,
+                        }),
+                      scope: sourceScope,
+                    },
+                    toolCount: 0,
+                    discovery: {
+                      status: "failed" as const,
+                      message: failure.message,
+                      ...(failure.stage ? { stage: failure.stage } : {}),
+                    },
+                  }),
+                );
+
+              return added.pipe(
+                Effect.catchTags({
+                  McpToolDiscoveryError: savedWithDiscoveryFailure,
+                  McpConnectionError: ({ message }) =>
+                    Effect.succeed(
+                      ToolResult.ok({
+                        namespace:
+                          normalizedInput.namespace ??
+                          deriveMcpNamespace({
+                            name: normalizedInput.name,
+                            endpoint: normalizedInput.endpoint,
+                          }),
+                        source: {
+                          id:
+                            normalizedInput.namespace ??
+                            deriveMcpNamespace({
+                              name: normalizedInput.name,
+                              endpoint: normalizedInput.endpoint,
+                            }),
+                          scope: sourceScope,
+                        },
+                        toolCount: 0,
+                        discovery: {
+                          status: "failed" as const,
+                          message,
+                        },
+                      }),
+                    ),
+                }),
+              );
+            },
+          }),
+          tool({
+            name: "configureSource",
+            description:
+              'Configure an existing remote MCP source with concrete fields. Use `source` returned by `mcp.addSource` or `sources.list`. The top-level `scope` is the credential target scope for bindings; in cloud, choose the user or organization credential scope deliberately. Pass secret refs as `{kind:"secret", secretId}` and OAuth connections as `{kind:"connection", connectionId}`.',
+            annotations: {
+              requiresApproval: true,
+              approvalDescription: "Configure an MCP source",
+            },
+            inputSchema: McpStaticConfigureSourceInputStandardSchema,
+            outputSchema: McpStaticConfigureSourceOutputStandardSchema,
+            execute: (rawInput, { ctx }) =>
+              Effect.gen(function* () {
+                const { source, ...config } =
+                  rawInput as typeof McpStaticConfigureSourceInputSchema.Type;
+                const sourceScope = resolveStaticScopeInput(ctx, source.scope);
+                const targetScope = resolveStaticScopeInput(ctx, config.scope);
+                yield* ctx.core.sources.configure({
+                  source: { id: source.id, scope: sourceScope },
+                  scope: targetScope,
+                  type: "mcp",
+                  config: {
+                    ...(config.name !== undefined ? { name: config.name } : {}),
+                    ...(config.endpoint !== undefined ? { endpoint: config.endpoint } : {}),
+                    ...(config.headers !== undefined ? { headers: config.headers } : {}),
+                    ...(config.queryParams !== undefined
+                      ? { queryParams: config.queryParams }
+                      : {}),
+                    ...(config.auth !== undefined ? { auth: config.auth } : {}),
+                  },
+                });
+                return ToolResult.ok({ configured: true });
+              }),
+          }),
+        ],
+      },
+    ],
 
     invokeTool: ({ ctx, toolRow, args, elicit }) =>
       Effect.gen(function* () {

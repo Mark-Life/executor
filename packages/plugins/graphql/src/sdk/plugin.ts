@@ -7,6 +7,7 @@ import {
   type CredentialBindingValue,
   definePlugin,
   tool,
+  defaultSourceInstallScopeId,
   ScopeId,
   SourceDetectionResult,
   StorageError,
@@ -40,6 +41,7 @@ import {
 import { extract } from "./extract";
 import { GraphqlIntrospectionError, GraphqlInvocationError } from "./errors";
 import { invokeWithLayer } from "./invoke";
+import { graphqlPresets } from "./presets";
 import {
   graphqlSchema,
   makeDefaultGraphqlStore,
@@ -120,7 +122,6 @@ const GraphqlInitialCredentialsInputSchema = Schema.Struct({
 type GraphqlInitialCredentialsInput = typeof GraphqlInitialCredentialsInputSchema.Type;
 
 const StaticAddSourceInputSchema = Schema.Struct({
-  scope: Schema.String,
   endpoint: Schema.String,
   name: Schema.String,
   introspectionJson: Schema.optional(Schema.String),
@@ -137,13 +138,67 @@ const SourceConfigureInputSchema = Schema.Struct({
   queryParams: Schema.optional(Schema.Record(Schema.String, GraphqlCredentialInputSchema)),
   auth: Schema.optional(GraphqlSourceAuthInputSchema),
 });
+const StaticConfigureSourceInputSchema = Schema.Struct({
+  source: Schema.Struct({
+    id: Schema.String,
+    scope: Schema.String,
+  }),
+  scope: Schema.String,
+  ...SourceConfigureInputSchema.fields,
+});
+const StaticConfigureSourceOutputSchema = Schema.Struct({
+  configured: Schema.Boolean,
+});
+const StaticGetSourceInputSchema = Schema.Struct({
+  namespace: Schema.String,
+  scope: Schema.String,
+});
+const StaticGetSourceOutputSchema = Schema.Struct({
+  source: Schema.NullOr(Schema.Unknown),
+});
 
 const StaticAddSourceInputStandardSchema = Schema.toStandardSchemaV1(
   Schema.toStandardJSONSchemaV1(StaticAddSourceInputSchema),
 );
 const StaticAddSourceOutputStandardSchema = Schema.toStandardSchemaV1(
-  Schema.toStandardJSONSchemaV1(Schema.Struct({ toolCount: Schema.Number })),
+  Schema.toStandardJSONSchemaV1(
+    Schema.Struct({
+      namespace: Schema.String,
+      source: Schema.Struct({
+        id: Schema.String,
+        scope: Schema.String,
+      }),
+      toolCount: Schema.Number,
+    }),
+  ),
 );
+const StaticGetSourceInputStandardSchema = Schema.toStandardSchemaV1(
+  Schema.toStandardJSONSchemaV1(StaticGetSourceInputSchema),
+);
+const StaticGetSourceOutputStandardSchema = Schema.toStandardSchemaV1(
+  Schema.toStandardJSONSchemaV1(StaticGetSourceOutputSchema),
+);
+const StaticConfigureSourceInputStandardSchema = Schema.toStandardSchemaV1(
+  Schema.toStandardJSONSchemaV1(StaticConfigureSourceInputSchema),
+);
+const StaticConfigureSourceOutputStandardSchema = Schema.toStandardSchemaV1(
+  Schema.toStandardJSONSchemaV1(StaticConfigureSourceOutputSchema),
+);
+
+const graphqlToolFailure = (code: string, message: string, details?: unknown) =>
+  ToolResult.fail({
+    code,
+    message,
+    ...(details === undefined ? {} : { details }),
+  });
+
+const resolveStaticScopeInput = (
+  ctx: { readonly scopes: readonly { readonly id: ScopeId; readonly name: string }[] },
+  value: string,
+): string =>
+  String(
+    ctx.scopes.find((scope) => scope.name === value || String(scope.id) === value)?.id ?? value,
+  );
 
 // ---------------------------------------------------------------------------
 // Plugin extension
@@ -890,6 +945,7 @@ export const graphqlPlugin = definePlugin((options?: GraphqlPluginOptions) => {
   return {
     id: "graphql" as const,
     packageName: "@executor-js/plugin-graphql",
+    sourcePresets: graphqlPresets,
     schema: graphqlSchema,
     storage: (deps): GraphqlStore => makeDefaultGraphqlStore(deps),
 
@@ -923,15 +979,75 @@ export const graphqlPlugin = definePlugin((options?: GraphqlPluginOptions) => {
         name: "GraphQL",
         tools: [
           tool({
+            name: "getSource",
+            description:
+              "Inspect an existing GraphQL source, including endpoint, auth mode, configured headers/query params, and credential slots. Use this before repairing an existing source with `graphql.configureSource`, `secrets.create`, or `oauth.start`.",
+            inputSchema: StaticGetSourceInputStandardSchema,
+            outputSchema: StaticGetSourceOutputStandardSchema,
+            execute: (input, { ctx }) =>
+              Effect.map(
+                self.getSource(input.namespace, resolveStaticScopeInput(ctx, input.scope)),
+                (source) => ToolResult.ok({ source }),
+              ),
+          }),
+          tool({
             name: "addSource",
-            description: "Add a GraphQL endpoint and register its operations as tools",
+            description:
+              "Add a GraphQL endpoint and register its operations as tools. Executor chooses the source install scope (local scope locally, organization scope in cloud) and returns it as `source`. For API keys or bearer tokens, first call `executor.coreTools.secrets.create` at the user's chosen credential scope and pass secret refs through `credentials`. For OAuth, start the browser flow with `executor.coreTools.oauth.start` using `credentialScope` set to the user's chosen personal or organization credential scope, verify completion with `connections.list`, then bind the connection through `credentials` or `graphql.configureSource`.",
             annotations: {
               requiresApproval: true,
               approvalDescription: "Add a GraphQL source",
             },
             inputSchema: StaticAddSourceInputStandardSchema,
             outputSchema: StaticAddSourceOutputStandardSchema,
-            execute: (input) => Effect.map(self.addSource(input), ToolResult.ok),
+            execute: (input, { ctx }) => {
+              const sourceScope = defaultSourceInstallScopeId(ctx.scopes);
+              if (sourceScope === null) {
+                return Effect.succeed(
+                  graphqlToolFailure(
+                    "source_scope_unavailable",
+                    "Cannot add a GraphQL source because this executor has no source install scope.",
+                  ),
+                );
+              }
+              return self.addSource({ ...input, scope: sourceScope }).pipe(
+                Effect.map((result) =>
+                  ToolResult.ok({
+                    ...result,
+                    source: { id: result.namespace, scope: sourceScope },
+                  }),
+                ),
+                Effect.catchTags({
+                  GraphqlIntrospectionError: ({ message }) =>
+                    Effect.succeed(graphqlToolFailure("graphql_introspection_failed", message)),
+                  GraphqlExtractionError: ({ message }) =>
+                    Effect.succeed(graphqlToolFailure("graphql_extraction_failed", message)),
+                }),
+              );
+            },
+          }),
+          tool({
+            name: "configureSource",
+            description:
+              'Configure an existing GraphQL source with concrete fields. Use `source` returned by `graphql.addSource` or `sources.list`. The top-level `scope` is the credential target scope for bindings; in cloud, choose the user or organization credential scope deliberately. Pass secret refs as `{kind:"secret", secretId}` and OAuth connections as `{kind:"connection", connectionId}`.',
+            annotations: {
+              requiresApproval: true,
+              approvalDescription: "Configure a GraphQL source",
+            },
+            inputSchema: StaticConfigureSourceInputStandardSchema,
+            outputSchema: StaticConfigureSourceOutputStandardSchema,
+            execute: (input, { ctx }) => {
+              const { source, ...config } = input as typeof StaticConfigureSourceInputSchema.Type;
+              const sourceScope = resolveStaticScopeInput(ctx, source.scope);
+              const targetScope = resolveStaticScopeInput(ctx, config.scope);
+              return Effect.as(
+                self.configure(
+                  { id: source.id, scope: sourceScope },
+                  { ...config, scope: targetScope },
+                ),
+                ToolResult.ok({ configured: true }),
+              );
+            },
           }),
         ],
       },

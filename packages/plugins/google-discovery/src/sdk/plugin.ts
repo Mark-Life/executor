@@ -5,9 +5,12 @@ import {
   SourceDetectionResult,
   ToolResult,
   Usage,
+  defaultSourceInstallScopeId,
   definePlugin,
+  tool,
   resolveSecretBackedMap,
   type PluginCtx,
+  type StaticToolSchema,
   type StorageFailure,
   type ToolAnnotations,
 } from "@executor-js/sdk/core";
@@ -17,18 +20,19 @@ import {
   makeGoogleDiscoveryStore,
   type GoogleDiscoveryStore,
 } from "./binding-store";
+import { googleDiscoveryPresets } from "./presets";
 import { extractGoogleDiscoveryManifest } from "./document";
 import { annotationsForOperation, invokeGoogleDiscoveryTool } from "./invoke";
 import { GoogleDiscoveryParseError, GoogleDiscoverySourceError } from "./errors";
-import type {
+import {
   GoogleDiscoveryAuth,
   GoogleDiscoveryFetchCredentials,
-  GoogleDiscoveryManifest,
-  GoogleDiscoveryManifestMethod,
-  GoogleDiscoveryMethodBinding,
-  GoogleDiscoveryStoredSourceData,
+  GoogleDiscoveryStoredSourceData as GoogleDiscoveryStoredSourceDataSchema,
+  type GoogleDiscoveryManifest,
+  type GoogleDiscoveryManifestMethod,
+  type GoogleDiscoveryMethodBinding,
 } from "./types";
-import { GoogleDiscoveryStoredSourceData as GoogleDiscoveryStoredSourceDataSchema } from "./types";
+import type { GoogleDiscoveryStoredSourceData } from "./types";
 
 // ---------------------------------------------------------------------------
 // Upstream-error message extraction
@@ -114,26 +118,124 @@ export interface GoogleDiscoveryProbeResult {
   readonly operations: readonly GoogleDiscoveryProbeOperation[];
 }
 
-export interface GoogleDiscoveryProbeInput {
-  readonly discoveryUrl: string;
-  readonly credentials?: GoogleDiscoveryFetchCredentials;
-}
-
-export interface GoogleDiscoveryAddSourceInput {
-  readonly name: string;
-  readonly scope: string;
-  readonly discoveryUrl: string;
-  readonly credentials?: GoogleDiscoveryFetchCredentials;
-  readonly namespace?: string;
-  readonly auth: GoogleDiscoveryAuth;
-}
-
 export interface GoogleDiscoveryUpdateSourceInput {
   readonly name?: string;
   /** Rewrite the source's auth — typically after a successful
    *  re-authenticate, to point at a freshly minted Connection. */
   readonly auth?: GoogleDiscoveryAuth;
 }
+
+const GoogleDiscoveryProbeInputSchema = Schema.Struct({
+  discoveryUrl: Schema.String,
+  credentials: Schema.optional(GoogleDiscoveryFetchCredentials),
+});
+
+const GoogleDiscoveryProbeOutputSchema = Schema.Struct({
+  name: Schema.String,
+  title: Schema.NullOr(Schema.String),
+  service: Schema.String,
+  version: Schema.String,
+  toolCount: Schema.Number,
+  scopes: Schema.Array(Schema.String),
+  operations: Schema.Array(
+    Schema.Struct({
+      toolPath: Schema.String,
+      method: Schema.String,
+      pathTemplate: Schema.String,
+      description: Schema.NullOr(Schema.String),
+    }),
+  ),
+});
+
+const GoogleDiscoveryAddSourceInputSchema = Schema.Struct({
+  name: Schema.String,
+  scope: Schema.String,
+  discoveryUrl: Schema.String,
+  credentials: Schema.optional(GoogleDiscoveryFetchCredentials),
+  namespace: Schema.optional(Schema.String),
+  auth: GoogleDiscoveryAuth,
+});
+const GoogleDiscoveryStaticAddSourceInputSchema = Schema.Struct({
+  name: Schema.String,
+  discoveryUrl: Schema.String,
+  credentials: Schema.optional(GoogleDiscoveryFetchCredentials),
+  namespace: Schema.optional(Schema.String),
+  auth: GoogleDiscoveryAuth,
+});
+export type GoogleDiscoveryProbeInput = typeof GoogleDiscoveryProbeInputSchema.Type;
+export type GoogleDiscoveryAddSourceInput = typeof GoogleDiscoveryAddSourceInputSchema.Type;
+
+const GoogleDiscoveryAddSourceOutputSchema = Schema.Struct({
+  namespace: Schema.String,
+  source: Schema.Struct({
+    id: Schema.String,
+    scope: Schema.String,
+  }),
+  toolCount: Schema.Number,
+});
+
+const GoogleDiscoveryGetSourceInputSchema = Schema.Struct({
+  namespace: Schema.String,
+  scope: Schema.String,
+});
+
+const GoogleDiscoveryGetSourceOutputSchema = Schema.Struct({
+  source: Schema.NullOr(Schema.Unknown),
+});
+
+const GoogleDiscoveryConfigureInputSchema = Schema.Struct({
+  name: Schema.optional(Schema.String),
+  auth: Schema.optional(GoogleDiscoveryAuth),
+});
+const GoogleDiscoveryConfigureSourceInputSchema = Schema.Struct({
+  source: Schema.Struct({
+    id: Schema.String,
+    scope: Schema.String,
+  }),
+  ...GoogleDiscoveryConfigureInputSchema.fields,
+});
+const GoogleDiscoveryConfigureSourceOutputSchema = Schema.Struct({
+  configured: Schema.Boolean,
+});
+
+const schemaToStaticToolSchema = <A, I>(schema: Schema.Decoder<A, I>): StaticToolSchema<A, I> =>
+  Schema.toStandardSchemaV1(Schema.toStandardJSONSchemaV1(schema) as never) as StaticToolSchema<
+    A,
+    I
+  >;
+
+const GoogleDiscoveryProbeInputStandardSchema = schemaToStaticToolSchema(
+  GoogleDiscoveryProbeInputSchema,
+);
+const GoogleDiscoveryProbeOutputStandardSchema = schemaToStaticToolSchema(
+  GoogleDiscoveryProbeOutputSchema,
+);
+const GoogleDiscoveryAddSourceInputStandardSchema = schemaToStaticToolSchema(
+  GoogleDiscoveryStaticAddSourceInputSchema,
+);
+const GoogleDiscoveryAddSourceOutputStandardSchema = schemaToStaticToolSchema(
+  GoogleDiscoveryAddSourceOutputSchema,
+);
+const GoogleDiscoveryGetSourceInputStandardSchema = schemaToStaticToolSchema(
+  GoogleDiscoveryGetSourceInputSchema,
+);
+const GoogleDiscoveryGetSourceOutputStandardSchema = schemaToStaticToolSchema(
+  GoogleDiscoveryGetSourceOutputSchema,
+);
+const GoogleDiscoveryConfigureSourceInputStandardSchema = schemaToStaticToolSchema(
+  GoogleDiscoveryConfigureSourceInputSchema,
+);
+const GoogleDiscoveryConfigureSourceOutputStandardSchema = schemaToStaticToolSchema(
+  GoogleDiscoveryConfigureSourceOutputSchema,
+);
+
+const resolveStaticScopeInput = (
+  ctx: { readonly scopes: readonly { readonly id: ScopeId; readonly name: string }[] },
+  value: string,
+): string =>
+  String(
+    ctx.scopes.find((scope) => scope.name === value || String(scope.id) === value)?.id ?? value,
+  );
 
 /**
  * Errors any Google Discovery extension method may surface.
@@ -439,10 +541,104 @@ export type GoogleDiscoveryPluginExtension = ReturnType<typeof makeGoogleDiscove
 export const googleDiscoveryPlugin = definePlugin(() => ({
   id: "googleDiscovery" as const,
   packageName: "@executor-js/plugin-google-discovery",
+  sourcePresets: googleDiscoveryPresets,
   schema: googleDiscoverySchema,
   storage: (deps) => makeGoogleDiscoveryStore(deps),
 
   extension: makeGoogleDiscoveryPluginExtension,
+
+  staticSources: (self) => [
+    {
+      id: "googleDiscovery",
+      kind: "executor",
+      name: "Google Discovery",
+      tools: [
+        tool({
+          name: "probeDiscovery",
+          description:
+            "Preview a Google Discovery document before adding it as a source. Use this to inspect available operations and OAuth scopes. Do not collect Google OAuth client secrets in chat; create them with `executor.coreTools.secrets.create`, then start sign-in with `executor.coreTools.oauth.start`.",
+          inputSchema: GoogleDiscoveryProbeInputStandardSchema,
+          outputSchema: GoogleDiscoveryProbeOutputStandardSchema,
+          execute: (input) => Effect.map(self.probeDiscovery(input), ToolResult.ok),
+        }),
+        tool({
+          name: "addSource",
+          description:
+            'Add a Google Discovery source and register its operations as tools. Executor chooses the source install scope (local scope locally, organization scope in cloud) and returns it as `source`. Recommended flow: call `probeDiscovery`, create any OAuth client id/client secret values through `secrets.create` at the user\'s chosen credential scope, call `oauth.start` with `credentialScope` set to the user\'s chosen personal or organization credential scope for OAuth sources, then pass `{kind:"oauth2", connectionId, clientIdSecretId, clientSecretSecretId, scopes}` or `{kind:"none"}` here.',
+          annotations: {
+            requiresApproval: true,
+            approvalDescription: "Add a Google Discovery source",
+          },
+          inputSchema: GoogleDiscoveryAddSourceInputStandardSchema,
+          outputSchema: GoogleDiscoveryAddSourceOutputStandardSchema,
+          execute: (input, { ctx }) => {
+            const args = input as typeof GoogleDiscoveryStaticAddSourceInputSchema.Type;
+            const sourceScope = defaultSourceInstallScopeId(ctx.scopes);
+            if (sourceScope === null) {
+              return Effect.succeed(
+                ToolResult.fail({
+                  code: "source_scope_unavailable",
+                  message:
+                    "Cannot add a Google Discovery source because this executor has no source install scope.",
+                }),
+              );
+            }
+            return Effect.map(self.addSource({ ...args, scope: sourceScope }), (result) =>
+              ToolResult.ok({
+                ...result,
+                source: { id: result.namespace, scope: sourceScope },
+              }),
+            );
+          },
+        }),
+        tool({
+          name: "getSource",
+          description:
+            "Inspect an existing Google Discovery source, including discovery URL, service metadata, auth mode, OAuth scopes, connection id, and credential slots. Use this before repairing an existing source with `googleDiscovery.configureSource`, `secrets.create`, or `oauth.start`.",
+          inputSchema: GoogleDiscoveryGetSourceInputStandardSchema,
+          outputSchema: GoogleDiscoveryGetSourceOutputStandardSchema,
+          execute: (input, { ctx }) => {
+            const args = input as typeof GoogleDiscoveryGetSourceInputSchema.Type;
+            return Effect.map(
+              self.getSource(args.namespace, resolveStaticScopeInput(ctx, args.scope)),
+              (source) => ToolResult.ok({ source }),
+            );
+          },
+        }),
+        tool({
+          name: "configureSource",
+          description:
+            "Configure an existing Google Discovery source with concrete fields. Use `source` returned by `googleDiscovery.addSource` or `sources.list`. For OAuth, call `oauth.start` with the target `credentialScope` first, then pass the returned connection id and client secret ids through `auth`.",
+          annotations: {
+            requiresApproval: true,
+            approvalDescription: "Configure a Google Discovery source",
+          },
+          inputSchema: GoogleDiscoveryConfigureSourceInputStandardSchema,
+          outputSchema: GoogleDiscoveryConfigureSourceOutputStandardSchema,
+          execute: (input, { ctx }) => {
+            const { source, ...config } =
+              input as typeof GoogleDiscoveryConfigureSourceInputSchema.Type;
+            const sourceScope = resolveStaticScopeInput(ctx, source.scope);
+            return Effect.as(
+              self.updateSource(source.id, sourceScope, config),
+              ToolResult.ok({ configured: true }),
+            );
+          },
+        }),
+      ],
+    },
+  ],
+
+  sourceConfigure: {
+    type: "googleDiscovery",
+    schema: GoogleDiscoveryConfigureInputSchema,
+    configure: ({ ctx, sourceId, sourceScope, config }) =>
+      makeGoogleDiscoveryPluginExtension(ctx as PluginCtx<GoogleDiscoveryStore>).updateSource(
+        sourceId,
+        sourceScope,
+        config as typeof GoogleDiscoveryConfigureInputSchema.Type,
+      ),
+  },
 
   invokeTool: ({ ctx, toolRow, args }) =>
     Effect.gen(function* () {

@@ -630,7 +630,9 @@ describe("graphqlPlugin", () => {
       expect(ids).toContain("test_api.query.hello");
       expect(ids).toContain("test_api.mutation.setGreeting");
       // static executor tool also present under the executor namespace
+      expect(ids).toContain("executor.graphql.getSource");
       expect(ids).toContain("executor.graphql.addSource");
+      expect(ids).toContain("executor.graphql.configureSource");
 
       const queryTool = tools.find((t) => t.id === "test_api.query.hello");
       expect(queryTool?.description).toBe("Say hello");
@@ -770,7 +772,6 @@ describe("graphqlPlugin", () => {
       const result = yield* executor.tools.invoke(
         "executor.graphql.addSource",
         {
-          scope: String(orgScope),
           endpoint: "http://localhost:4000/graphql",
           name: "Via Static",
           introspectionJson,
@@ -778,14 +779,57 @@ describe("graphqlPlugin", () => {
         },
         { onElicitation: "accept-all" },
       );
-      expect(result).toEqual({ ok: true, data: { toolCount: 2, namespace: "via_static" } });
+      expect(result).toEqual({
+        ok: true,
+        data: {
+          namespace: "via_static",
+          source: { id: "via_static", scope: String(orgScope) },
+          toolCount: 2,
+        },
+      });
       expect(yield* executor.graphql.getSource("via_static", String(userScope))).toBeNull();
       expect((yield* executor.graphql.getSource("via_static", String(orgScope)))?.scope).toBe(
         orgScope,
       );
+      const inspected = yield* executor.tools.invoke(
+        "executor.graphql.getSource",
+        { namespace: "via_static", scope: "org" },
+        { onElicitation: "accept-all" },
+      );
+      expect(inspected).toMatchObject({
+        ok: true,
+        data: { source: { namespace: "via_static", scope: String(orgScope) } },
+      });
 
       const tools = yield* executor.tools.list();
       expect(tools.filter((t) => t.sourceId === "via_static").length).toBe(2);
+    }),
+  );
+
+  it.effect("static executor.graphql.addSource returns actionable tool failures", () =>
+    Effect.gen(function* () {
+      const config = makeTestConfig({ plugins: [graphqlPlugin()] as const });
+      const executor = yield* createExecutor(config);
+
+      const result = yield* executor.tools.invoke(
+        "executor.graphql.addSource",
+        {
+          endpoint: "http://127.0.0.1:1/graphql",
+          name: "Broken GraphQL",
+          namespace: "broken_graphql",
+        },
+        { onElicitation: "accept-all" },
+      );
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          code: "graphql_introspection_failed",
+        },
+      });
+
+      yield* executor.close();
+      yield* Effect.promise(() => config.testDb.close());
     }),
   );
 
@@ -796,8 +840,11 @@ describe("graphqlPlugin", () => {
       const schema = yield* executor.tools.schema("executor.graphql.addSource");
 
       expect(schema).not.toBeNull();
-      expect(schema!.inputTypeScript).toContain("scope: string");
       expect(schema!.inputTypeScript).toContain("endpoint: string");
+      expect(schema!.inputTypeScript).toContain("credentials?: { scope: string");
+      expect(
+        (schema!.inputSchema as { properties?: Record<string, unknown> }).properties,
+      ).not.toHaveProperty("scope");
       expect(
         (schema!.inputSchema as { properties?: Record<string, unknown> }).properties,
       ).not.toHaveProperty("targetScope");
@@ -823,7 +870,6 @@ describe("graphqlPlugin", () => {
           "executor.graphql.addSource",
           {
             endpoint: server.endpoint,
-            scope: TEST_SCOPE,
             introspectionJson,
             namespace: "runtime_graphql",
           },

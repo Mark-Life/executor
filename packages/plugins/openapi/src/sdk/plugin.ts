@@ -4,16 +4,17 @@ import { HttpClient } from "effect/unstable/http";
 
 import {
   ConnectionId,
+  CredentialBindingRef,
   ScopeId,
   SecretId,
   SourceDetectionResult,
   StorageError,
   ToolResult,
+  defaultSourceInstallScopeId,
   definePlugin,
   tool,
   resolveSecretBackedMap,
   type CredentialBindingValue,
-  type CredentialBindingRef,
   type PluginCtx,
   type StorageFailure,
   type ToolAnnotations,
@@ -31,7 +32,8 @@ import { parse, resolveSpecText } from "./parse";
 import { extract } from "./extract";
 import { compileToolDefinitions, type ToolDefinition } from "./definitions";
 import { annotationsForOperation, invokeWithLayer } from "./invoke";
-import { previewSpec, SpecPreview } from "./preview";
+import { previewSpec, type SpecPreview } from "./preview";
+import { openApiPresets } from "./presets";
 import {
   makeDefaultOpenapiStore,
   openapiSchema,
@@ -247,6 +249,70 @@ const PreviewSpecInputSchema = Schema.Struct({
   ),
 });
 
+const StaticPreviewServerVariableSchema = Schema.Struct({
+  default: Schema.String,
+  enum: Schema.NullOr(Schema.Array(Schema.String)),
+  description: Schema.NullOr(Schema.String),
+});
+const StaticPreviewServerSchema = Schema.Struct({
+  url: Schema.String,
+  description: Schema.NullOr(Schema.String),
+  variables: Schema.NullOr(Schema.Record(Schema.String, StaticPreviewServerVariableSchema)),
+});
+const StaticPreviewOAuthAuthorizationCodeFlowSchema = Schema.Struct({
+  authorizationUrl: Schema.String,
+  tokenUrl: Schema.String,
+  refreshUrl: Schema.NullOr(Schema.String),
+  scopes: Schema.Record(Schema.String, Schema.String),
+});
+const StaticPreviewOAuthClientCredentialsFlowSchema = Schema.Struct({
+  tokenUrl: Schema.String,
+  refreshUrl: Schema.NullOr(Schema.String),
+  scopes: Schema.Record(Schema.String, Schema.String),
+});
+const StaticPreviewOAuthFlowsSchema = Schema.Struct({
+  authorizationCode: Schema.NullOr(StaticPreviewOAuthAuthorizationCodeFlowSchema),
+  clientCredentials: Schema.NullOr(StaticPreviewOAuthClientCredentialsFlowSchema),
+});
+const StaticPreviewSecuritySchemeSchema = Schema.Struct({
+  name: Schema.String,
+  type: Schema.Literals(["http", "apiKey", "oauth2", "openIdConnect"]),
+  scheme: Schema.NullOr(Schema.String),
+  bearerFormat: Schema.NullOr(Schema.String),
+  in: Schema.NullOr(Schema.Literals(["header", "query", "cookie"])),
+  headerName: Schema.NullOr(Schema.String),
+  description: Schema.NullOr(Schema.String),
+  flows: Schema.NullOr(StaticPreviewOAuthFlowsSchema),
+  openIdConnectUrl: Schema.NullOr(Schema.String),
+});
+const StaticPreviewOAuth2PresetSchema = Schema.Struct({
+  label: Schema.String,
+  securitySchemeName: Schema.String,
+  flow: Schema.Literals(["authorizationCode", "clientCredentials"]),
+  authorizationUrl: Schema.NullOr(Schema.String),
+  tokenUrl: Schema.String,
+  refreshUrl: Schema.NullOr(Schema.String),
+  scopes: Schema.Record(Schema.String, Schema.String),
+});
+const StaticPreviewSpecOutputSchema = Schema.Struct({
+  title: Schema.NullOr(Schema.String),
+  version: Schema.NullOr(Schema.String),
+  servers: Schema.Array(StaticPreviewServerSchema),
+  operationCount: Schema.Number,
+  tags: Schema.Array(Schema.String),
+  securitySchemes: Schema.Array(StaticPreviewSecuritySchemeSchema),
+  authStrategies: Schema.Array(Schema.Struct({ schemes: Schema.Array(Schema.String) })),
+  headerPresets: Schema.Array(
+    Schema.Struct({
+      label: Schema.String,
+      headers: Schema.Record(Schema.String, Schema.NullOr(Schema.String)),
+      secretHeaders: Schema.Array(Schema.String),
+    }),
+  ),
+  oauth2Presets: Schema.Array(StaticPreviewOAuth2PresetSchema),
+});
+type StaticPreviewSpecOutput = typeof StaticPreviewSpecOutputSchema.Type;
+
 const OpenApiSpecInputSchema = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("url"), url: Schema.String }),
   Schema.Struct({ kind: Schema.Literal("blob"), value: Schema.String }),
@@ -301,10 +367,16 @@ const OpenApiConfigureInputSchema = Schema.Struct({
   oauth2Source: Schema.optional(OAuth2SourceConfig),
 });
 export type OpenApiConfigureInput = typeof OpenApiConfigureInputSchema.Type;
+const OpenApiConfigureSourceInputSchema = Schema.Struct({
+  source: Schema.Struct({
+    id: Schema.String,
+    scope: Schema.String,
+  }),
+  ...OpenApiConfigureInputSchema.fields,
+});
 const OpenApiOAuthInputSchema = OAuth2SourceConfig;
 
 const AddSourceInputSchema = Schema.Struct({
-  scope: Schema.String,
   spec: OpenApiSpecInputSchema,
   name: Schema.String,
   baseUrl: Schema.String,
@@ -322,11 +394,25 @@ const AddSourceInputSchema = Schema.Struct({
 
 const AddSourceOutputSchema = Schema.Struct({
   sourceId: Schema.String,
+  source: Schema.Struct({
+    id: Schema.String,
+    scope: Schema.String,
+  }),
   toolCount: Schema.Number,
+});
+const GetSourceInputSchema = Schema.Struct({
+  namespace: Schema.String,
+  scope: Schema.String,
+});
+const GetSourceOutputSchema = Schema.Struct({
+  source: Schema.NullOr(Schema.Unknown),
 });
 
 const PreviewSpecInputStandardSchema = Schema.toStandardSchemaV1(
   Schema.toStandardJSONSchemaV1(PreviewSpecInputSchema),
+);
+const PreviewSpecOutputStandardSchema = Schema.toStandardSchemaV1(
+  Schema.toStandardJSONSchemaV1(StaticPreviewSpecOutputSchema),
 );
 const AddSourceInputStandardSchema = Schema.toStandardSchemaV1(
   Schema.toStandardJSONSchemaV1(AddSourceInputSchema),
@@ -334,6 +420,96 @@ const AddSourceInputStandardSchema = Schema.toStandardSchemaV1(
 const AddSourceOutputStandardSchema = Schema.toStandardSchemaV1(
   Schema.toStandardJSONSchemaV1(AddSourceOutputSchema),
 );
+const OpenApiConfigureSourceInputStandardSchema = Schema.toStandardSchemaV1(
+  Schema.toStandardJSONSchemaV1(OpenApiConfigureSourceInputSchema),
+);
+const OpenApiConfigureSourceOutputStandardSchema = Schema.toStandardSchemaV1(
+  Schema.toStandardJSONSchemaV1(Schema.Struct({ result: Schema.Array(CredentialBindingRef) })),
+);
+const GetSourceInputStandardSchema = Schema.toStandardSchemaV1(
+  Schema.toStandardJSONSchemaV1(GetSourceInputSchema),
+);
+const GetSourceOutputStandardSchema = Schema.toStandardSchemaV1(
+  Schema.toStandardJSONSchemaV1(GetSourceOutputSchema),
+);
+
+const openApiToolFailure = (code: string, message: string, details?: unknown) =>
+  ToolResult.fail({
+    code,
+    message,
+    ...(details === undefined ? {} : { details }),
+  });
+
+const staticPreviewOutput = (preview: SpecPreview): StaticPreviewSpecOutput => ({
+  title: Option.getOrNull(preview.title),
+  version: Option.getOrNull(preview.version),
+  servers: preview.servers.map((server) => ({
+    url: server.url,
+    description: Option.getOrNull(server.description),
+    variables: Option.getOrNull(server.variables)
+      ? Object.fromEntries(
+          Object.entries(Option.getOrNull(server.variables) ?? {}).map(([name, variable]) => [
+            name,
+            {
+              default: variable.default,
+              enum: Option.getOrNull(variable.enum),
+              description: Option.getOrNull(variable.description),
+            },
+          ]),
+        )
+      : null,
+  })),
+  operationCount: preview.operationCount,
+  tags: preview.tags,
+  securitySchemes: preview.securitySchemes.map((scheme) => ({
+    name: scheme.name,
+    type: scheme.type,
+    scheme: Option.getOrNull(scheme.scheme),
+    bearerFormat: Option.getOrNull(scheme.bearerFormat),
+    in: Option.getOrNull(scheme.in),
+    headerName: Option.getOrNull(scheme.headerName),
+    description: Option.getOrNull(scheme.description),
+    flows: Option.isSome(scheme.flows)
+      ? {
+          authorizationCode: Option.isSome(scheme.flows.value.authorizationCode)
+            ? {
+                authorizationUrl: scheme.flows.value.authorizationCode.value.authorizationUrl,
+                tokenUrl: scheme.flows.value.authorizationCode.value.tokenUrl,
+                refreshUrl: Option.getOrNull(scheme.flows.value.authorizationCode.value.refreshUrl),
+                scopes: scheme.flows.value.authorizationCode.value.scopes,
+              }
+            : null,
+          clientCredentials: Option.isSome(scheme.flows.value.clientCredentials)
+            ? {
+                tokenUrl: scheme.flows.value.clientCredentials.value.tokenUrl,
+                refreshUrl: Option.getOrNull(scheme.flows.value.clientCredentials.value.refreshUrl),
+                scopes: scheme.flows.value.clientCredentials.value.scopes,
+              }
+            : null,
+        }
+      : null,
+    openIdConnectUrl: Option.getOrNull(scheme.openIdConnectUrl),
+  })),
+  authStrategies: preview.authStrategies,
+  headerPresets: preview.headerPresets,
+  oauth2Presets: preview.oauth2Presets.map((preset) => ({
+    label: preset.label,
+    securitySchemeName: preset.securitySchemeName,
+    flow: preset.flow,
+    authorizationUrl: Option.getOrNull(preset.authorizationUrl),
+    tokenUrl: preset.tokenUrl,
+    refreshUrl: Option.getOrNull(preset.refreshUrl),
+    scopes: preset.scopes,
+  })),
+});
+
+const resolveStaticScopeInput = (
+  ctx: { readonly scopes: readonly { readonly id: ScopeId; readonly name: string }[] },
+  value: string,
+): string =>
+  String(
+    ctx.scopes.find((scope) => scope.name === value || String(scope.id) === value)?.id ?? value,
+  );
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1109,6 +1285,7 @@ export const openApiPlugin = definePlugin((options?: OpenApiPluginOptions) => {
   return {
     id: "openapi" as const,
     packageName: "@executor-js/plugin-openapi",
+    sourcePresets: openApiPresets,
     schema: openapiSchema,
     storage: (deps): OpenapiStore => makeDefaultOpenapiStore(deps),
 
@@ -1236,20 +1413,95 @@ export const openApiPlugin = definePlugin((options?: OpenApiPluginOptions) => {
         tools: [
           tool({
             name: "previewSpec",
-            description: "Preview an OpenAPI document before adding it as a source",
+            description:
+              "Preview an OpenAPI document before adding it as a source. Call this first when the user provides a spec URL/blob so you can inspect servers, auth schemes, operation count, tags, and credential slots before `addSource`. This agent-facing preview intentionally omits the full operations list; use `operationCount` and `tags` for full-size specs. Do not collect API keys or OAuth client secrets in chat; use `executor.coreTools.secrets.create` for those values.",
             inputSchema: PreviewSpecInputStandardSchema,
-            execute: (input) => Effect.map(self.previewSpec(input), ToolResult.ok),
+            outputSchema: PreviewSpecOutputStandardSchema,
+            execute: (input) =>
+              self.previewSpec(input).pipe(
+                Effect.map((preview) => ToolResult.ok(staticPreviewOutput(preview))),
+                Effect.catchTags({
+                  OpenApiParseError: ({ message }) =>
+                    Effect.succeed(openApiToolFailure("openapi_parse_failed", message)),
+                  OpenApiExtractionError: ({ message }) =>
+                    Effect.succeed(openApiToolFailure("openapi_extraction_failed", message)),
+                  OpenApiOAuthError: ({ message }) =>
+                    Effect.succeed(openApiToolFailure("openapi_oauth_failed", message)),
+                }),
+              ),
+          }),
+          tool({
+            name: "getSource",
+            description:
+              "Inspect an existing OpenAPI source, including effective base URL, configured headers/query params, OAuth settings, and stored credential slots. Use this before repairing an existing source with `openapi.configureSource`, `secrets.create`, or `oauth.start`.",
+            inputSchema: GetSourceInputStandardSchema,
+            outputSchema: GetSourceOutputStandardSchema,
+            execute: (input, { ctx }) =>
+              Effect.map(
+                self.getSource(input.namespace, resolveStaticScopeInput(ctx, input.scope)),
+                (source) => ToolResult.ok({ source }),
+              ),
           }),
           tool({
             name: "addSource",
-            description: "Add an OpenAPI source and register its operations as tools",
+            description:
+              "Add an OpenAPI source and register its operations as tools. Executor chooses the source install scope (local scope locally, organization scope in cloud) and returns it as `source`. Recommended flow: call `previewSpec`, choose or confirm namespace/name/baseUrl from the preview (baseUrl is only needed when the spec cannot infer one or the user wants an override), declare credential slots here for sensitive headers/query params, then call `secrets.create` and `openapi.configureSource` with the user's chosen credential scope for per-scope bindings. Use `oauth.start` with `credentialScope` set to the user's chosen personal or organization credential scope for browser OAuth sign-in.",
             annotations: {
               requiresApproval: true,
               approvalDescription: "Add an OpenAPI source",
             },
             inputSchema: AddSourceInputStandardSchema,
             outputSchema: AddSourceOutputStandardSchema,
-            execute: (input) => Effect.map(self.addSpec(input), ToolResult.ok),
+            execute: (input, { ctx }) => {
+              const sourceScope = defaultSourceInstallScopeId(ctx.scopes);
+              if (sourceScope === null) {
+                return Effect.succeed(
+                  openApiToolFailure(
+                    "source_scope_unavailable",
+                    "Cannot add an OpenAPI source because this executor has no source install scope.",
+                  ),
+                );
+              }
+              return self.addSpec({ ...input, scope: sourceScope }).pipe(
+                Effect.map((result) =>
+                  ToolResult.ok({
+                    ...result,
+                    source: { id: result.sourceId, scope: sourceScope },
+                  }),
+                ),
+                Effect.catchTags({
+                  OpenApiParseError: ({ message }) =>
+                    Effect.succeed(openApiToolFailure("openapi_parse_failed", message)),
+                  OpenApiExtractionError: ({ message }) =>
+                    Effect.succeed(openApiToolFailure("openapi_extraction_failed", message)),
+                  OpenApiOAuthError: ({ message }) =>
+                    Effect.succeed(openApiToolFailure("openapi_oauth_failed", message)),
+                }),
+              );
+            },
+          }),
+          tool({
+            name: "configureSource",
+            description:
+              'Configure an existing OpenAPI source with concrete fields. Use `source` returned by `openapi.addSource` or `sources.list`. The top-level `scope` is the credential target scope for bindings; in cloud, choose the user or organization credential scope deliberately. Pass secret refs as `{kind:"secret", secretId}` and OAuth connections as `{kind:"connection", connectionId}`.',
+            annotations: {
+              requiresApproval: true,
+              approvalDescription: "Configure an OpenAPI source",
+            },
+            inputSchema: OpenApiConfigureSourceInputStandardSchema,
+            outputSchema: OpenApiConfigureSourceOutputStandardSchema,
+            execute: (input, { ctx }) => {
+              const { source, ...config } = input as typeof OpenApiConfigureSourceInputSchema.Type;
+              const sourceScope = resolveStaticScopeInput(ctx, source.scope);
+              const targetScope = resolveStaticScopeInput(ctx, config.scope);
+              return Effect.map(
+                self.configure(
+                  { id: source.id, scope: sourceScope },
+                  { ...config, scope: targetScope },
+                ),
+                (result) => ToolResult.ok({ result }),
+              );
+            },
           }),
         ],
       },
