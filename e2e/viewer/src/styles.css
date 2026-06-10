@@ -1,0 +1,181 @@
+/* Dark GitHub-ish palette. */
+body {
+  font:
+    15px/1.55 ui-sans-serif,
+    system-ui;
+  margin: 0;
+  color: #d7dce5;
+  background: #0b0f17;
+}
+.page {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 24px;
+}
+a {
+  color: #58a6ff;
+  text-decoration: none;
+}
+h1 {
+  font-size: 17px;
+  margin: 0 0 4px;
+}
+.hint {
+  color: #6b7785;
+  font-size: 13px;
+  margin-top: 2px;
+}
+.dim {
+  color: #3d4651;
+}
+.stamp {
+  color: #3d4651;
+  font-size: 12px;
+  margin-top: 1.2rem;
+}
+.ok-text {
+  color: #7ee787;
+}
+.error-text {
+  color: #ff7b72;
+}
+
+/* matrix */
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin-top: 1rem;
+}
+th,
+td {
+  padding: 0.5rem 0.7rem;
+  border-bottom: 1px solid #161b22;
+  text-align: left;
+  font-size: 14px;
+}
+th {
+  color: #6b7785;
+  font-weight: 600;
+}
+a.watch {
+  display: inline-block;
+  padding: 0.2rem 0.55rem;
+  border: 1px solid #21262d;
+  border-radius: 7px;
+  background: #0f1620;
+  white-space: nowrap;
+  font-weight: 600;
+}
+a.watch:hover {
+  border-color: #388bfd;
+  background: #101a2a;
+}
+a.watch.ok {
+  color: #7ee787;
+}
+a.watch.no {
+  color: #ff7b72;
+}
+.d {
+  color: #6b7785;
+  font-weight: 400;
+  font-size: 12px;
+}
+
+/* run page */
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.tool-link {
+  font-size: 13px;
+  border: 1px solid #21262d;
+  border-radius: 7px;
+  background: #0f1620;
+  padding: 0.25rem 0.7rem;
+  margin-left: 8px;
+}
+.tool-link:hover {
+  border-color: #388bfd;
+}
+.errbox {
+  background: #160b0b;
+  border: 1px solid #6e2a2a;
+  color: #ff7b72;
+  border-radius: 8px;
+  padding: 0.7rem 0.9rem;
+  font-size: 12.5px;
+  overflow: auto;
+  max-height: 320px;
+  white-space: pre-wrap;
+}
+.hero-video {
+  display: block;
+  width: 100%;
+  margin-top: 0.8rem;
+  border: 1px solid #21262d;
+  border-radius: 10px;
+  background: #010409;
+}
+.shots {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+  margin-top: 1rem;
+}
+.shots figure {
+  margin: 0;
+}
+.shots img {
+  display: block;
+  width: 100%;
+  border: 1px solid #21262d;
+  border-radius: 8px;
+}
+.shots figcaption {
+  color: #8b98a9;
+  font-size: 12.5px;
+  margin-top: 4px;
+}
+
+/* test source (monaco) */
+.section {
+  font-size: 13px;
+  color: #6b7785;
+  font-weight: 600;
+  margin: 1.2rem 0 0.5rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.code {
+  border: 1px solid #21262d;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* run-page tabs (video / source) */
+.tabs {
+  display: flex;
+  gap: 6px;
+  margin: 1rem 0 0.6rem;
+  border-bottom: 1px solid #161b22;
+}
+.tab {
+  font: inherit;
+  font-size: 13px;
+  color: #6b7785;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 0.35rem 0.7rem;
+  cursor: pointer;
+}
+.tab:hover {
+  color: #d7dce5;
+}
+.tab.active {
+  color: #d7dce5;
+  border-bottom-color: #388bfd;
+}

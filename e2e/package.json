@@ -1,0 +1,33 @@
+{
+  "name": "@executor-js/e2e",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:cloud": "vitest run --project cloud",
+    "test:selfhost": "vitest run --project selfhost",
+    "test:watch": "vitest",
+    "viewer:build": "bun scripts/rebuild-viewer.ts",
+    "serve": "bun scripts/rebuild-viewer.ts && bun scripts/serve.ts"
+  },
+  "dependencies": {
+    "@executor-js/api": "workspace:*",
+    "@executor-js/plugin-openapi": "workspace:*",
+    "@executor-js/sdk": "workspace:*",
+    "@kitlangton/terminal-control": "^0.3.0",
+    "effect": "catalog:",
+    "monaco-editor": "^0.55.1",
+    "playwright": "^1.60.0",
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  }
+}
