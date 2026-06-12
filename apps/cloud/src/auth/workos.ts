@@ -5,6 +5,7 @@
 import { env } from "cloudflare:workers";
 import { Context, Data, Effect, Layer, Option, Schema } from "effect";
 import { GeneratePortalLinkIntent, WorkOS } from "@workos-inc/node/worker";
+import { parseCookie } from "./cookies";
 import { WorkOSError, tryPromiseService, withServiceLogging } from "./errors";
 
 const COOKIE_NAME = "wos-session";
@@ -442,13 +443,3 @@ export class WorkOSClient extends Context.Service<WorkOSClient, WorkOSClientServ
 // keep `@tanstack/react-start` out of the DO bundle; that coupling is gone now
 // that `handlers.ts` no longer imports react-start, so the alias moved home.)
 export const CoreSharedServices = WorkOSClient.Default;
-
-const parseCookie = (cookieHeader: string | null, name: string): string | null => {
-  if (!cookieHeader) return null;
-  const match = cookieHeader
-    .split(";")
-    .map((c) => c.trim())
-    .find((c) => c.startsWith(`${name}=`));
-  if (!match) return null;
-  return match.slice(name.length + 1) || null;
-};

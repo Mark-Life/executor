@@ -52,6 +52,13 @@ const AuthCallbackSearch = Schema.Struct({
   state: Schema.optional(Schema.String),
 });
 
+// Where to send the user after the callback completes (the /login page passes
+// the path the SSR auth gate captured). Validated server-side to same-origin
+// relative paths before use.
+const AuthLoginSearch = Schema.Struct({
+  returnTo: Schema.optional(Schema.String),
+});
+
 const PendingInvitationInviter = Schema.Struct({
   email: Schema.String,
   name: Schema.NullOr(Schema.String),
@@ -143,7 +150,7 @@ const McpApprovalErrors = [
 
 /** Public auth endpoints — no authentication required */
 export class CloudAuthPublicApi extends HttpApiGroup.make("cloudAuthPublic")
-  .add(HttpApiEndpoint.get("login", "/auth/login"))
+  .add(HttpApiEndpoint.get("login", "/auth/login", { query: AuthLoginSearch }))
   .add(
     HttpApiEndpoint.get("callback", "/auth/callback", {
       query: AuthCallbackSearch,

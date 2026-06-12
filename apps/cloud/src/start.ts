@@ -2,6 +2,7 @@ import { createMiddleware, createStart } from "@tanstack/react-start";
 
 import { cloudApiHandler } from "./app";
 import { isAppOwnedPath } from "./app-paths";
+import { authGateMiddleware } from "./auth/ssr-gate";
 import { prepareMcpOrgScope } from "./mcp/mount";
 import { marketingMiddleware, posthogProxyMiddleware, sentryTunnelMiddleware } from "./edge";
 
@@ -44,12 +45,15 @@ const appRequestMiddleware = createMiddleware({ type: "request" }).server(
 // The edge concerns (marketing proxy, sentry tunnel, posthog proxy) live in
 // `./edge`; they run before the app's own dispatch. Ordering is load-bearing:
 // marketing first (production landing/page proxy), then the analytics tunnels,
-// then the unified app plane (api + mcp).
+// then the unified app plane (api + mcp), and last the SSR auth gate — it only
+// sees document requests nothing above claimed, so signed-out visitors are
+// redirected to /login before the SPA (and its app-shell skeleton) is served.
 export const startInstance = createStart(() => ({
   requestMiddleware: [
     marketingMiddleware,
     sentryTunnelMiddleware,
     posthogProxyMiddleware,
     appRequestMiddleware,
+    authGateMiddleware,
   ],
 }));

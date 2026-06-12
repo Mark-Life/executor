@@ -1,7 +1,12 @@
 import React from "react";
 import { AUTH_PATHS } from "../../auth/api";
+import { safeReturnTo } from "../../auth/return-to";
 
-export const LoginPage = () => {
+export const LoginPage = ({ returnTo }: { returnTo?: string | undefined }) => {
+  const destination = safeReturnTo(returnTo);
+  const loginHref = destination
+    ? `${AUTH_PATHS.login}?returnTo=${encodeURIComponent(destination)}`
+    : AUTH_PATHS.login;
   return (
     <div className="flex min-h-screen items-center justify-center bg-background">
       <div className="mx-auto flex w-full max-w-sm flex-col items-center gap-6">
@@ -10,7 +15,7 @@ export const LoginPage = () => {
           <p className="text-sm text-muted-foreground">Sign in to manage your tools and sources</p>
         </div>
         <a
-          href={AUTH_PATHS.login}
+          href={loginHref}
           className="inline-flex h-10 w-full items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground shadow hover:bg-primary/90 transition-colors"
         >
           Sign in

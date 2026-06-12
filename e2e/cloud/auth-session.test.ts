@@ -5,7 +5,7 @@
 // callback refusing forged/incomplete redirects, the sealed-session cookie
 // actually authorizing the session API, and logout dropping the cookie.
 import { expect } from "@effect/vitest";
-import { Effect } from "effect";
+import { Effect, Encoding, Result, Schema } from "effect";
 
 import { scenario } from "../src/scenario";
 import { Api, Target } from "../src/services";
@@ -17,6 +17,14 @@ const setCookieFor = (response: Response, name: string): string => {
   }
   return "";
 };
+
+// state = base64url(JSON { nonce, returnTo? }) — the app's login-state
+// envelope (apps/cloud/src/auth/login-state.ts).
+const decodeLoginState = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({ nonce: Schema.String, returnTo: Schema.optional(Schema.String) }),
+  ),
+);
 
 scenario(
   "Auth · login redirects to hosted AuthKit carrying a short-lived CSRF state cookie",
@@ -33,7 +41,16 @@ scenario(
 
     const authorizeUrl = new URL(response.headers.get("location") ?? "");
     const state = authorizeUrl.searchParams.get("state") ?? "";
-    expect(state, "the redirect carries an unguessable CSRF state").toMatch(/^[0-9a-f]{64}$/);
+    // The nonce is the CSRF secret; returnTo (absent here, no query was
+    // passed) rides beside it.
+    const decoded = decodeLoginState(
+      Result.getOrElse(Encoding.decodeBase64UrlString(state), () => ""),
+    );
+    expect(decoded._tag, "the state decodes as our login-state envelope").toBe("Some");
+    expect(
+      decoded._tag === "Some" ? decoded.value.nonce : "",
+      "the state carries an unguessable CSRF nonce",
+    ).toMatch(/^[0-9a-f]{64}$/);
     expect(
       authorizeUrl.searchParams.get("redirect_uri"),
       "AuthKit is told to come back to this deployment's callback",

@@ -14,6 +14,7 @@ import { Route as SetupMcpRouteImport } from './routes/app/setup-mcp'
 import { Route as SecretsRouteImport } from './routes/app/secrets'
 import { Route as DotDotDotDotDotDotDotDotPackagesReactSrcRoutesPoliciesRouteImport } from './../../../packages/react/src/routes/policies'
 import { Route as OrgRouteImport } from './routes/app/org'
+import { Route as LoginRouteImport } from './routes/app/login'
 import { Route as CreateOrgRouteImport } from './routes/app/create-org'
 import { Route as BillingRouteImport } from './routes/app/billing'
 import { Route as ApiKeysRouteImport } from './routes/app/api-keys'
@@ -48,6 +49,11 @@ const DotDotDotDotDotDotDotDotPackagesReactSrcRoutesPoliciesRoute =
 const OrgRoute = OrgRouteImport.update({
   id: '/org',
   path: '/org',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CreateOrgRoute = CreateOrgRouteImport.update({
@@ -103,6 +109,7 @@ export interface FileRoutesByFullPath {
   '/api-keys': typeof ApiKeysRoute
   '/billing': typeof BillingRoute
   '/create-org': typeof CreateOrgRoute
+  '/login': typeof LoginRoute
   '/org': typeof OrgRoute
   '/policies': typeof DotDotDotDotDotDotDotDotPackagesReactSrcRoutesPoliciesRoute
   '/secrets': typeof SecretsRoute
@@ -118,6 +125,7 @@ export interface FileRoutesByTo {
   '/api-keys': typeof ApiKeysRoute
   '/billing': typeof BillingRoute
   '/create-org': typeof CreateOrgRoute
+  '/login': typeof LoginRoute
   '/org': typeof OrgRoute
   '/policies': typeof DotDotDotDotDotDotDotDotPackagesReactSrcRoutesPoliciesRoute
   '/secrets': typeof SecretsRoute
@@ -134,6 +142,7 @@ export interface FileRoutesById {
   '/api-keys': typeof ApiKeysRoute
   '/billing': typeof BillingRoute
   '/create-org': typeof CreateOrgRoute
+  '/login': typeof LoginRoute
   '/org': typeof OrgRoute
   '/policies': typeof DotDotDotDotDotDotDotDotPackagesReactSrcRoutesPoliciesRoute
   '/secrets': typeof SecretsRoute
@@ -151,6 +160,7 @@ export interface FileRouteTypes {
     | '/api-keys'
     | '/billing'
     | '/create-org'
+    | '/login'
     | '/org'
     | '/policies'
     | '/secrets'
@@ -166,6 +176,7 @@ export interface FileRouteTypes {
     | '/api-keys'
     | '/billing'
     | '/create-org'
+    | '/login'
     | '/org'
     | '/policies'
     | '/secrets'
@@ -181,6 +192,7 @@ export interface FileRouteTypes {
     | '/api-keys'
     | '/billing'
     | '/create-org'
+    | '/login'
     | '/org'
     | '/policies'
     | '/secrets'
@@ -197,6 +209,7 @@ export interface RootRouteChildren {
   ApiKeysRoute: typeof ApiKeysRoute
   BillingRoute: typeof BillingRoute
   CreateOrgRoute: typeof CreateOrgRoute
+  LoginRoute: typeof LoginRoute
   OrgRoute: typeof OrgRoute
   DotDotDotDotDotDotDotDotPackagesReactSrcRoutesPoliciesRoute: typeof DotDotDotDotDotDotDotDotPackagesReactSrcRoutesPoliciesRoute
   SecretsRoute: typeof SecretsRoute
@@ -243,6 +256,13 @@ declare module '@tanstack/react-router' {
       path: '/org'
       fullPath: '/org'
       preLoaderRoute: typeof OrgRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/create-org': {
@@ -310,6 +330,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiKeysRoute: ApiKeysRoute,
   BillingRoute: BillingRoute,
   CreateOrgRoute: CreateOrgRoute,
+  LoginRoute: LoginRoute,
   OrgRoute: OrgRoute,
   DotDotDotDotDotDotDotDotPackagesReactSrcRoutesPoliciesRoute:
     DotDotDotDotDotDotDotDotPackagesReactSrcRoutesPoliciesRoute,

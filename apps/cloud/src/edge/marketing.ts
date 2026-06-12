@@ -11,6 +11,8 @@
 import { env } from "cloudflare:workers";
 import { createMiddleware } from "@tanstack/react-start";
 
+import { parseCookie } from "../auth/cookies";
+
 const MARKETING_PATHS = [
   "/home",
   "/setup",
@@ -26,15 +28,6 @@ const isMarketingPath = (pathname: string) =>
   MARKETING_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
 
 const getMarketingWorker = () => env.MARKETING as { fetch: typeof fetch } | undefined;
-
-const parseCookie = (cookieHeader: string | null, name: string): string | null => {
-  if (!cookieHeader) return null;
-  const match = cookieHeader
-    .split(";")
-    .map((v) => v.trim())
-    .find((v) => v.startsWith(`${name}=`));
-  return match ? match.slice(name.length + 1) || null : null;
-};
 
 export const marketingMiddleware = createMiddleware({ type: "request" }).server(
   async ({ pathname, request, next }) => {

@@ -10,7 +10,11 @@ import {
   McpSessionForbiddenError,
 } from "./api";
 import { NoOrganization } from "@executor-js/api/server";
+// Pure constants/codec module (no React) — safe in the backend graph.
+import { AUTH_HINT_COOKIE } from "@executor-js/react/multiplayer/auth-hint";
 import { SessionContext, SessionCookies } from "./middleware";
+import { encodeLoginState, decodeLoginState } from "./login-state";
+import { safeReturnTo } from "./return-to";
 import { UserStoreService } from "./context";
 import { env } from "cloudflare:workers";
 import { WorkOSError } from "./errors";
@@ -63,7 +67,7 @@ const DELETE_COOKIE_OPTIONS = {
   secure: true,
 };
 
-const randomState = (): string => {
+const randomNonce = (): string => {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -143,14 +147,19 @@ export const CloudAuthPublicHandlers = HttpApiBuilder.group(
   "cloudAuthPublic",
   (handlers) =>
     handlers
-      .handleRaw("login", () =>
+      .handleRaw("login", ({ query }) =>
         Effect.gen(function* () {
           const workos = yield* WorkOSClient;
           // Use the explicit public site URL — in dev, the request's Host
           // header points at the internal proxy target, not the public URL
           // WorkOS needs to redirect back to.
           const origin = env.VITE_PUBLIC_SITE_URL ?? "";
-          const state = randomState();
+          // OAuth round-trips `state` verbatim, so the validated returnTo
+          // rides inside it next to the CSRF nonce — no extra cookie.
+          const state = encodeLoginState({
+            nonce: randomNonce(),
+            returnTo: safeReturnTo(query.returnTo) ?? undefined,
+          });
           const url = workos.getAuthorizationUrl(`${origin}${AUTH_PATHS.callback}`, state);
           return setResponseCookie(
             HttpServerResponse.redirect(url, { status: 302 }),
@@ -211,9 +220,15 @@ export const CloudAuthPublicHandlers = HttpApiBuilder.group(
             return HttpServerResponse.text("Failed to create session", { status: 500 });
           }
 
+          // Resume where the SSR gate interrupted them. The state passed the
+          // CSRF check above whenever it's present, but it's still a
+          // round-tripped value — so the returnTo inside it is re-validated
+          // like any other untrusted path.
+          const returnTo = safeReturnTo(decodeLoginState(query.state)?.returnTo) ?? "/";
+
           return deleteResponseCookie(
             setResponseCookie(
-              HttpServerResponse.redirect("/", { status: 302 }),
+              HttpServerResponse.redirect(returnTo, { status: 302 }),
               "wos-session",
               sealedSession,
               RESPONSE_COOKIE_OPTIONS,
@@ -253,7 +268,13 @@ export const CloudSessionAuthHandlers = HttpApiBuilder.group(
       )
       .handleRaw("logout", () =>
         Effect.succeed(
-          deleteResponseCookie(HttpServerResponse.redirect("/", { status: 302 }), "wos-session"),
+          // The auth-hint travels with the session: leaving it behind would
+          // make the next page load optimistically paint the app shell for a
+          // signed-out browser.
+          deleteResponseCookie(
+            deleteResponseCookie(HttpServerResponse.redirect("/", { status: 302 }), "wos-session"),
+            AUTH_HINT_COOKIE,
+          ),
         ),
       )
       .handle("organizations", () =>

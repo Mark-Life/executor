@@ -19,12 +19,16 @@ import { Toaster } from "@executor-js/react/components/sonner";
 import { ExecutorPluginsProvider } from "@executor-js/sdk/client";
 import { plugins as clientPlugins } from "virtual:executor/plugins-client";
 import { AuthProvider, useAuth } from "../web/auth";
+import { loginPath } from "../auth/return-to";
 import { SupportOptions } from "../web/components/support-options";
-import { LoginPage } from "../web/pages/login";
 import { Shell } from "../web/shell";
 import appCss from "@executor-js/react/globals.css?url";
 
 const ONBOARDING_PATHS = new Set(["/create-org", "/setup-mcp"]);
+// Routes that render for SIGNED-OUT visitors — the auth gate stays out of
+// their way entirely (the SSR gate in auth/ssr-gate.ts bounces signed-in
+// visitors off /login before the document is even served).
+const PUBLIC_PATHS = new Set(["/login"]);
 
 if (typeof window !== "undefined" && import.meta.env.VITE_PUBLIC_SENTRY_DSN) {
   Sentry.init({
@@ -72,7 +76,28 @@ const captureFrontendError: FrontendErrorReporter = (error, context) => {
   });
 };
 
+function NotFoundPage() {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-background px-6 py-10">
+      <section className="w-full max-w-md text-center">
+        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">404</p>
+        <h1 className="mt-2 text-xl font-semibold text-foreground">Page not found</h1>
+        <p className="mt-2 text-sm leading-6 text-muted-foreground">
+          There&apos;s nothing at this address.
+        </p>
+        <a
+          href="/"
+          className="mt-6 inline-flex h-9 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground shadow hover:bg-primary/90 transition-colors"
+        >
+          Go home
+        </a>
+      </section>
+    </main>
+  );
+}
+
 export const Route = createRootRoute({
+  notFoundComponent: NotFoundPage,
   head: () => ({
     meta: [
       { charSet: "utf-8" },
@@ -209,9 +234,13 @@ function AuthGate() {
   const location = useLocation();
   const navigate = useNavigate();
   const isOnboardingRoute = ONBOARDING_PATHS.has(location.pathname);
+  const isPublicRoute = PUBLIC_PATHS.has(location.pathname);
 
   const needsOrgRedirect =
-    auth.status === "authenticated" && auth.organization == null && !isOnboardingRoute;
+    auth.status === "authenticated" &&
+    auth.organization == null &&
+    !isOnboardingRoute &&
+    !isPublicRoute;
 
   React.useEffect(() => {
     if (needsOrgRedirect) {
@@ -219,12 +248,34 @@ function AuthGate() {
     }
   }, [needsOrgRedirect, navigate]);
 
+  // The signed-out safety net behind the SSR gate: if a session dies while
+  // the SPA is already loaded (logout elsewhere, expiry), go to /login the
+  // same way a fresh document request would — keeping where they were.
+  const needsLoginRedirect = auth.status === "unauthenticated" && !isPublicRoute;
+  React.useEffect(() => {
+    if (needsLoginRedirect) {
+      window.location.assign(loginPath(`${location.pathname}${location.searchStr}`));
+    }
+  }, [needsLoginRedirect, location.pathname, location.searchStr]);
+
+  if (isPublicRoute) {
+    return <Outlet />;
+  }
+
+  // Signed-out visitors never reach this point on a fresh document request —
+  // the SSR gate (auth/ssr-gate.ts) redirected them to /login before the SPA
+  // was served. So "loading" here means a VERIFIED signed-in user whose
+  // /account/me is still in flight (and usually not even that: the auth-hint
+  // cookie resolves them to "authenticated" a frame after mount), making the
+  // app-shell skeleton the right placeholder again.
   if (auth.status === "loading") {
     return <ShellSkeleton />;
   }
 
+  // Mid-session sign-out (logout elsewhere, expiry): blank for the moment the
+  // redirect effect above needs — never a skeleton for an app they're out of.
   if (auth.status === "unauthenticated") {
-    return <LoginPage />;
+    return <div className="h-screen bg-background" />;
   }
 
   if (isOnboardingRoute) {
