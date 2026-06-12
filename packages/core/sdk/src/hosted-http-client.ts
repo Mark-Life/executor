@@ -127,6 +127,14 @@ export const validateHostedOutboundUrl = (
     }
   });
 
+const CREDENTIAL_HEADERS = ["authorization", "proxy-authorization", "cookie"] as const;
+
+const stripCredentialHeaders = (init: RequestInit | undefined): RequestInit => {
+  const headers = new Headers(init?.headers);
+  for (const name of CREDENTIAL_HEADERS) headers.delete(name);
+  return { ...init, headers };
+};
+
 const guardFetch = (
   underlying: typeof globalThis.fetch,
   options: HostedHttpClientOptions,
@@ -134,10 +142,14 @@ const guardFetch = (
   (async (input, init) => {
     const maxRedirects = options.maxRedirects ?? 10;
     let current: Parameters<typeof globalThis.fetch>[0] | URL = input;
+    let currentInit = init;
     for (let redirects = 0; redirects <= maxRedirects; redirects++) {
       const url = current instanceof Request ? current.url : String(current);
       Effect.runSync(validateHostedOutboundUrl(url, options));
-      const response = await underlying(current, { ...init, redirect: "manual" });
+      const response = await underlying(current, {
+        ...currentInit,
+        redirect: "manual",
+      });
       if (
         response.status >= 300 &&
         response.status < 400 &&
@@ -145,19 +157,18 @@ const guardFetch = (
         redirects < maxRedirects
       ) {
         const next = new URL(response.headers.get("location")!, url);
+        // Cross-origin redirects are followed (the loop re-validates every
+        // hop), but credentials minted for the original origin must not leak
+        // to the redirect target — same as fetch/curl behavior.
         if (next.origin !== new URL(url).origin) {
-          // oxlint-disable-next-line executor/no-try-catch-or-throw -- boundary: fetch-compatible adapter must reject blocked requests
-          throw new HostedOutboundRequestBlocked({
-            url: next.toString(),
-            reason: "Cross-origin redirects are not allowed",
-          });
+          currentInit = stripCredentialHeaders(currentInit);
         }
         current = next.toString();
         continue;
       }
       return response;
     }
-    return await underlying(current, { ...init, redirect: "manual" });
+    return await underlying(current, { ...currentInit, redirect: "manual" });
   }) as typeof globalThis.fetch;
 
 export const makeHostedHttpClientLayer = (

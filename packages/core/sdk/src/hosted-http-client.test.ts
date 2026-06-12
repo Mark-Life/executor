@@ -75,7 +75,95 @@ describe("hosted outbound HTTP client", () => {
     }),
   );
 
-  it.effect("rejects cross-origin redirects before following them", () =>
+  it.effect("follows cross-origin redirects but strips credential headers", () =>
+    Effect.gen(function* () {
+      const seen: Array<{
+        url: string;
+        authorization: string | null;
+        cookie: string | null;
+      }> = [];
+      const fakeFetch: typeof globalThis.fetch = (async (input, init) => {
+        const url = input instanceof Request ? input.url : String(input);
+        const headers = new Headers(init?.headers);
+        seen.push({
+          url,
+          authorization: headers.get("authorization"),
+          cookie: headers.get("cookie"),
+        });
+        if (url === "https://api.example/start") {
+          return new Response(null, {
+            status: 302,
+            headers: { location: "https://cdn.example/blob" },
+          });
+        }
+        return new Response("bytes", { status: 200 });
+      }) as typeof globalThis.fetch;
+
+      const response = yield* Effect.gen(function* () {
+        const client = yield* HttpClient.HttpClient;
+        return yield* client.execute(
+          HttpClientRequest.get("https://api.example/start").pipe(
+            HttpClientRequest.setHeaders({
+              authorization: "Bearer secret",
+              cookie: "session=abc",
+              accept: "application/octet-stream",
+            }),
+          ),
+        );
+      }).pipe(Effect.provide(makeHostedHttpClientLayer({ fetch: fakeFetch })));
+
+      expect(response.status).toBe(200);
+      expect(seen).toHaveLength(2);
+      expect(seen[0]).toMatchObject({
+        url: "https://api.example/start",
+        authorization: "Bearer secret",
+        cookie: "session=abc",
+      });
+      expect(seen[1]).toMatchObject({
+        url: "https://cdn.example/blob",
+        authorization: null,
+        cookie: null,
+      });
+    }),
+  );
+
+  it.effect("keeps credential headers on same-origin redirects", () =>
+    Effect.gen(function* () {
+      const seen: Array<{ url: string; authorization: string | null }> = [];
+      const fakeFetch: typeof globalThis.fetch = (async (input, init) => {
+        const url = input instanceof Request ? input.url : String(input);
+        seen.push({
+          url,
+          authorization: new Headers(init?.headers).get("authorization"),
+        });
+        if (url === "https://api.example/start") {
+          return new Response(null, {
+            status: 302,
+            headers: { location: "/moved" },
+          });
+        }
+        return new Response("ok", { status: 200 });
+      }) as typeof globalThis.fetch;
+
+      const response = yield* Effect.gen(function* () {
+        const client = yield* HttpClient.HttpClient;
+        return yield* client.execute(
+          HttpClientRequest.get("https://api.example/start").pipe(
+            HttpClientRequest.setHeaders({ authorization: "Bearer secret" }),
+          ),
+        );
+      }).pipe(Effect.provide(makeHostedHttpClientLayer({ fetch: fakeFetch })));
+
+      expect(response.status).toBe(200);
+      expect(seen).toHaveLength(2);
+      expect(seen[1]).toMatchObject({
+        url: "https://api.example/moved",
+        authorization: "Bearer secret",
+      });
+    }),
+  );
+
+  it.effect("rejects cross-origin redirects to private addresses", () =>
     Effect.gen(function* () {
       let calls = 0;
       const fakeFetch: typeof globalThis.fetch = (async (input) => {
@@ -84,7 +172,7 @@ describe("hosted outbound HTTP client", () => {
         if (url === "https://api.example/start") {
           return new Response(null, {
             status: 302,
-            headers: { location: "https://elsewhere.example/next" },
+            headers: { location: "http://169.254.169.254/latest/meta-data/" },
           });
         }
         return new Response("unexpected", { status: 200 });
