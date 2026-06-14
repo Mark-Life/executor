@@ -12,9 +12,10 @@
 // The policy is removed in an `ensuring` finalizer — a leaked require_approval
 // gate on a shared built-in tool would pause unrelated scenarios.
 //
-// Lives under cloud/ for now because cloud is the only host wired for browser
-// approval; it moves to scenarios/ (cross-target) as self-host and Cloudflare
-// gain the feature.
+// Cross-target: runs on every host that wires browser approval (cloud's Durable
+// Object, self-host's in-process store, Cloudflare's DO). The host differences —
+// where the approval URL points, which engine holds the pause — are invisible
+// here; the scenario only drives the rendered console page.
 import { expect } from "@effect/vitest";
 import { Effect } from "effect";
 import { composePluginApi } from "@executor-js/api/server";

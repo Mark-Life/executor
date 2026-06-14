@@ -21,6 +21,7 @@ const startTestServer = async (): Promise<string> => {
       mcp: {
         handleRequest: async () => new Response("ok"),
         handleApprovalRequest: async () => new Response("ok"),
+        handlePausedRequest: async () => new Response("ok"),
         close: async () => {},
       },
     },
@@ -80,6 +81,7 @@ describe("startServer network bind auth", () => {
           mcp: {
             handleRequest: async () => new Response("ok"),
             handleApprovalRequest: async () => new Response("ok"),
+            handlePausedRequest: async () => new Response("ok"),
             close: async () => {},
           },
         },
@@ -101,6 +103,7 @@ describe("startServer network bind auth", () => {
         mcp: {
           handleRequest: async () => new Response("ok"),
           handleApprovalRequest: async () => new Response("ok"),
+          handlePausedRequest: async () => new Response("ok"),
           close: async () => {},
         },
       },
@@ -131,6 +134,7 @@ describe("startServer network bind auth", () => {
         mcp: {
           handleRequest: async () => new Response("ok"),
           handleApprovalRequest: async () => new Response("ok"),
+          handlePausedRequest: async () => new Response("ok"),
           close: async () => {},
         },
       },
@@ -166,6 +170,7 @@ describe("startServer network bind auth", () => {
         mcp: {
           handleRequest: async () => new Response("ok"),
           handleApprovalRequest: async () => new Response("ok"),
+          handlePausedRequest: async () => new Response("ok"),
           close: async () => {},
         },
       },

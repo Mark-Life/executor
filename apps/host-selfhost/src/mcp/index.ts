@@ -1,4 +1,4 @@
-import { Layer } from "effect";
+import { Effect, Layer } from "effect";
 
 import { IdentityProvider } from "@executor-js/api/server";
 import type { McpAuthProvider, McpErrorReporter, McpSessionStore } from "@executor-js/host-mcp";
@@ -50,9 +50,48 @@ export interface SelfHostMcpSeams {
   readonly sessions: Layer.Layer<McpSessionStore>;
   /** Route 500 defects through the host's console `ErrorCapture`. */
   readonly reporter: Layer.Layer<McpErrorReporter>;
+  /**
+   * The browser-approval HTTP handler, mounted by the app at
+   * `/api/mcp-sessions/*`: a session-cookie-gated web handler that serves the
+   * paused-execution detail (GET) and records the human's decision (POST
+   * `/resume`) for the console approval page. Browser elicitation mode only.
+   */
+  readonly approvalHandler: (request: Request) => Promise<Response>;
   /** Dispose all live in-process MCP sessions at shutdown (not a seam). */
   readonly close: () => Promise<void>;
 }
+
+const jsonResponse = (value: unknown, status: number): Response =>
+  new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
+
+/**
+ * Gate the browser-approval endpoints behind a valid Better Auth session (the
+ * console page calls them with the user's cookie), then delegate to the
+ * in-process store's paused/resume handlers. Single-tenant: any authenticated
+ * user of the one org may act on a session it still holds — the store confirms
+ * the execution belongs to the addressed session before recording.
+ */
+const makeApprovalHandler =
+  (
+    store: ReturnType<typeof makeSelfHostMcpSessionStore>,
+    betterAuth: BetterAuthHandle,
+  ): ((request: Request) => Promise<Response>) =>
+  async (request) => {
+    // A malformed cookie must read as unauthenticated, not 500.
+    const session = await Effect.runPromise(
+      Effect.tryPromise({
+        try: () => betterAuth.auth.api.getSession({ headers: request.headers }),
+        catch: () => "session lookup failed",
+      }).pipe(Effect.orElseSucceed(() => null)),
+    );
+    if (!session) return jsonResponse({ error: "Unauthorized" }, 401);
+
+    return (
+      (await store.handlePausedRequest(request)) ??
+      (await store.handleApprovalRequest(request)) ??
+      jsonResponse({ error: "Not found" }, 404)
+    );
+  };
 
 /**
  * Build the self-host MCP serving seams over the long-lived DB handle. The auth
@@ -73,6 +112,7 @@ export const makeSelfHostMcpSeams = (
     auth,
     sessions: selfHostMcpSessions(sessionStore),
     reporter: selfHostMcpReporter,
+    approvalHandler: makeApprovalHandler(sessionStore, betterAuth),
     close: sessionStore.close,
   };
 };

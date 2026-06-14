@@ -19,6 +19,10 @@
     "./browser-approval": {
       "types": "./src/browser-approval.ts",
       "default": "./src/browser-approval.ts"
+    },
+    "./browser-approval-store": {
+      "types": "./src/browser-approval-store.ts",
+      "default": "./src/browser-approval-store.ts"
     }
   },
   "scripts": {

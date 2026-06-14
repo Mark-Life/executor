@@ -5,7 +5,6 @@ import * as Atom from "effect/unstable/reactivity/Atom";
 import { createFileRoute } from "@tanstack/react-router";
 
 import { ResumeApprovalPage, ResumeApprovalPageView } from "../pages/resume-approval";
-import { pausedExecutionAtom } from "../api/atoms";
 import type { ElicitationAction } from "../components/elicitation-approval";
 
 const SearchParams = Schema.toStandardSchemaV1(
@@ -30,6 +29,48 @@ const decodeLocalMcpResumeResult = Schema.decodeUnknownOption(LocalMcpResumeResu
 class LocalMcpResumeError extends Data.TaggedError("LocalMcpResumeError")<{
   readonly message: string;
 }> {}
+
+const McpPausedExecutionInfo = Schema.Struct({
+  text: Schema.String,
+  structured: Schema.Unknown,
+});
+const decodeMcpPausedExecutionInfo = Schema.decodeUnknownOption(McpPausedExecutionInfo);
+
+// Paused-execution detail for the in-process / Cloudflare hosts, fetched
+// session-scoped: the MCP paused execution lives in its session's engine, so it
+// is resolved through `/api/mcp-sessions/:id/...`, not the session-less
+// `/api/executions/:id` (which hits a different engine and can't see it). Cloud
+// serves the equivalent through its own route + Durable Object RPC.
+const mcpPausedExecutionAtom = Atom.family(
+  (key: { readonly mcpSessionId: string; readonly executionId: string }) =>
+    Atom.make(
+      Effect.gen(function* () {
+        const response = yield* Effect.tryPromise({
+          try: () =>
+            fetch(
+              `/api/mcp-sessions/${encodeURIComponent(key.mcpSessionId)}/executions/${encodeURIComponent(key.executionId)}`,
+            ),
+          catch: () => new LocalMcpResumeError({ message: "Failed to load the paused execution." }),
+        });
+        if (!response.ok) {
+          return yield* new LocalMcpResumeError({
+            message: `Paused execution unavailable (${response.status}).`,
+          });
+        }
+        const body = yield* Effect.tryPromise({
+          try: () => response.json(),
+          catch: () => new LocalMcpResumeError({ message: "Paused response was not valid JSON." }),
+        });
+        const decoded = decodeMcpPausedExecutionInfo(body);
+        if (Option.isNone(decoded)) {
+          return yield* new LocalMcpResumeError({
+            message: "Paused response had an unexpected shape.",
+          });
+        }
+        return decoded.value;
+      }),
+    ),
+);
 
 type LocalMcpResumeInput = {
   readonly mcpSessionId: string;
@@ -96,7 +137,9 @@ function RouteComponent() {
 }
 
 function LocalMcpResumeApproval(props: { executionId: string; mcpSessionId: string }) {
-  const paused = useAtomValue(pausedExecutionAtom(props.executionId));
+  const paused = useAtomValue(
+    mcpPausedExecutionAtom({ mcpSessionId: props.mcpSessionId, executionId: props.executionId }),
+  );
   const doResume = useAtomSet(resumeLocalMcpExecution, { mode: "promiseExit" });
   const resume = useCallback(
     (executionId: string, action: ElicitationAction, content?: Record<string, unknown>) =>

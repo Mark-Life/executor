@@ -4,6 +4,7 @@ import { McpErrorReporter, type Principal } from "@executor-js/host-mcp";
 import {
   McpEngineBuildError,
   type McpBuildServer,
+  type McpBuildServerOptions,
 } from "@executor-js/host-mcp/in-memory-session-store";
 import { createExecutorMcpServer } from "@executor-js/host-mcp/tool-server";
 
@@ -37,7 +38,7 @@ export type McpExecutionStackLayer = Layer.Layer<
  */
 export const makeMcpBuildServer =
   (executionStack: McpExecutionStackLayer): McpBuildServer =>
-  (principal: Principal) =>
+  (principal: Principal, options?: McpBuildServerOptions) =>
     makeExecutionStack(
       principal.accountId,
       principal.organizationId,
@@ -46,7 +47,11 @@ export const makeMcpBuildServer =
       Effect.map(({ engine }) => engine),
       Effect.provide(executionStack),
       Effect.mapError((cause) => new McpEngineBuildError({ cause })),
-      Effect.flatMap((engine) => createExecutorMcpServer({ engine })),
+      Effect.flatMap((engine) =>
+        createExecutorMcpServer({ engine, ...(options ?? {}) }).pipe(
+          Effect.map((mcpServer) => ({ mcpServer, engine })),
+        ),
+      ),
     );
 
 /**

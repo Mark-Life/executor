@@ -85,6 +85,10 @@ export const makeSelfHostApp = async (options: MakeSelfHostAppOptions = {}) => {
       routes: [
         // Better Auth owns /api/auth/* — the full path reaches it unmodified.
         HttpRouter.add("*", "/api/auth/*", HttpEffect.fromWebHandler(authHandler)),
+        // Browser approval of paused MCP executions: the console resume page
+        // reads paused detail (GET) and records the decision (POST .../resume),
+        // session-cookie-gated, delegating to the in-process MCP store.
+        HttpRouter.add("*", "/api/mcp-sessions/*", HttpEffect.fromWebHandler(mcp.approvalHandler)),
         // App-local admin (invite-code) API, served under /api/admin/*.
         makeSelfHostAdminApiLayer({ betterAuth, db: dbHandle, mountPrefix: "/api" }),
         // Public system API: /api/health + /api/setup-status (unauthenticated).

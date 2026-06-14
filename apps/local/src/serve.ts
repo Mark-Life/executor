@@ -326,7 +326,11 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
       }
 
       if (url.pathname.startsWith("/api/mcp-sessions/")) {
-        return maybeWithCorsHeaders(await handlers.mcp.handleApprovalRequest(req));
+        const handler =
+          req.method === "GET"
+            ? handlers.mcp.handlePausedRequest
+            : handlers.mcp.handleApprovalRequest;
+        return maybeWithCorsHeaders(await handler(req));
       }
 
       // OAuth result polling — local-only, served outside the typed API
