@@ -311,11 +311,33 @@ export const refreshDeviceTokens = async (input: {
   };
 };
 
+export type BrowserOpenCommand = readonly [command: string, args: ReadonlyArray<string>];
+
+const normalizeBrowserOpenUrl = (url: string): string | undefined => {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.href : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+export const browserOpenCommand = (
+  url: string,
+  platform: typeof process.platform = process.platform,
+): BrowserOpenCommand | undefined => {
+  const normalizedUrl = normalizeBrowserOpenUrl(url);
+  if (!normalizedUrl) return undefined;
+  if (platform === "darwin") return ["open", [normalizedUrl]];
+  if (platform === "win32") return ["rundll32.exe", ["url.dll,FileProtocolHandler", normalizedUrl]];
+  return ["xdg-open", [normalizedUrl]];
+};
+
 /** Best-effort open the verification URL in the user's default browser. */
 export const openBrowser = (url: string): void => {
-  const platform = process.platform;
-  const command = platform === "darwin" ? "open" : platform === "win32" ? "cmd" : "xdg-open";
-  const args = platform === "win32" ? ["/c", "start", "", url] : [url];
+  const openCommand = browserOpenCommand(url);
+  if (!openCommand) return;
+  const [command, args] = openCommand;
   try {
     const child = spawn(command, args, { stdio: "ignore", detached: true });
     // Swallow async spawn failures (e.g. the opener binary is missing), the
