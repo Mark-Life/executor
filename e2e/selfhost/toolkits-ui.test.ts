@@ -3,12 +3,29 @@ import { randomBytes } from "node:crypto";
 import { expect } from "@effect/vitest";
 import { Effect } from "effect";
 import { composePluginApi } from "@executor-js/api/server";
+import { openApiHttpPlugin } from "@executor-js/plugin-openapi/api";
 import { toolkitsPlugin } from "@executor-js/plugin-toolkits/server";
+import { AuthTemplateSlug, ConnectionName, IntegrationSlug } from "@executor-js/sdk/shared";
 
 import { scenario } from "../src/scenario";
 import { Api, Browser, Target } from "../src/services";
 
-const api = composePluginApi([toolkitsPlugin()] as const);
+const api = composePluginApi([toolkitsPlugin(), openApiHttpPlugin()] as const);
+
+const hiddenPersonalSpec = (baseUrl: string): string =>
+  JSON.stringify({
+    openapi: "3.0.3",
+    info: { title: "Personal Hidden API", version: "1.0.0" },
+    servers: [{ url: baseUrl }],
+    paths: {
+      "/personal-only": {
+        get: {
+          operationId: "personalOnly",
+          responses: { "200": { description: "Personal-only response" } },
+        },
+      },
+    },
+  });
 
 scenario(
   "Toolkits · self-host UI creates a toolkit and configures tools",
@@ -24,6 +41,8 @@ scenario(
     const prefix = `toolkits-ui-${suffix}`;
     const name = `${prefix}-created`;
     const slug = name;
+    const hiddenPersonalIntegration = `${prefix}-personal-api`;
+    const hiddenPersonalConnection = "mine";
     const seededToolkits = [
       { owner: "org" as const, name: `${prefix}-workspace-a` },
       { owner: "org" as const, name: `${prefix}-workspace-b` },
@@ -35,6 +54,18 @@ scenario(
     const blockPattern = "executor.coreTools.policies.list";
 
     const cleanup = Effect.gen(function* () {
+      yield* client.connections
+        .remove({
+          params: {
+            owner: "user",
+            integration: IntegrationSlug.make(hiddenPersonalIntegration),
+            name: ConnectionName.make(hiddenPersonalConnection),
+          },
+        })
+        .pipe(Effect.ignore);
+      yield* client.openapi
+        .removeSpec({ params: { slug: hiddenPersonalIntegration } })
+        .pipe(Effect.ignore);
       const listed = yield* client.toolkits.list();
       yield* Effect.forEach(
         listed.toolkits.filter((row) => row.slug.startsWith(prefix)),
@@ -49,6 +80,29 @@ scenario(
         (toolkit) => client.toolkits.create({ payload: toolkit }),
         { discard: true },
       );
+      yield* client.openapi.addSpec({
+        payload: {
+          spec: { kind: "blob", value: hiddenPersonalSpec("http://127.0.0.1:59999") },
+          slug: IntegrationSlug.make(hiddenPersonalIntegration),
+          baseUrl: "http://127.0.0.1:59999",
+          authenticationTemplate: [
+            {
+              slug: "apiKey",
+              type: "apiKey",
+              headers: { "x-api-key": [{ type: "variable", name: "token" }] },
+            },
+          ],
+        },
+      });
+      yield* client.connections.create({
+        payload: {
+          owner: "user",
+          name: ConnectionName.make(hiddenPersonalConnection),
+          integration: IntegrationSlug.make(hiddenPersonalIntegration),
+          template: AuthTemplateSlug.make("apiKey"),
+          value: "unused-token",
+        },
+      });
 
       yield* browser.session(identity, async ({ page, step }) => {
         await step("Open the Toolkits plugin page", async () => {
@@ -143,8 +197,18 @@ scenario(
           await page.getByRole("heading", { name }).waitFor();
         });
 
-        await step("Add a connection to the toolkit", async () => {
+        await step("The connection picker explains hidden personal connections", async () => {
           await page.getByRole("button", { name: "Manage toolkit connections" }).click();
+          const dialog = page.getByRole("dialog", { name: "Manage connections" });
+          await dialog.waitFor();
+          await dialog
+            .getByText(
+              "You have 1 personal connection that is not shown because this is a shared toolkit.",
+            )
+            .waitFor();
+        });
+
+        await step("Add a connection to the toolkit", async () => {
           const dialog = page.getByRole("dialog", { name: "Manage connections" });
           await dialog.waitFor();
           await dialog.getByLabel("Search connections and tools").fill("policies.list");

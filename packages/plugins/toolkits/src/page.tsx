@@ -763,6 +763,7 @@ function AddConnectionDialog(props: {
   open: boolean;
   groups: readonly ToolkitConnectionGroup[];
   configuredConnections: readonly ConfiguredConnectionView[];
+  hiddenPersonalConnectionCount: number;
   integrations: readonly Integration[];
   integrationPlugins: readonly IntegrationPlugin[];
   showOwnerLabels: boolean;
@@ -843,6 +844,14 @@ function AddConnectionDialog(props: {
                 className="h-8 min-w-0 border-0 bg-transparent px-0 text-xs shadow-none focus-visible:ring-0"
               />
             </div>
+            {props.hiddenPersonalConnectionCount > 0 ? (
+              <p className="mt-2 px-1 text-xs leading-5 text-muted-foreground">
+                You have {props.hiddenPersonalConnectionCount} personal{" "}
+                {props.hiddenPersonalConnectionCount === 1 ? "connection" : "connections"} that{" "}
+                {props.hiddenPersonalConnectionCount === 1 ? "is" : "are"} not shown because this is
+                a shared toolkit.
+              </p>
+            ) : null}
           </div>
           <div className="min-h-0 overflow-y-auto p-3" style={{ maxHeight: "32rem" }}>
             <div className="mb-2 flex items-center justify-between px-1">
@@ -1045,6 +1054,10 @@ function ToolkitWorkspace(props: {
     [props.toolkit, props.tools],
   );
   const connectionGroups = useMemo(() => buildConnectionGroups(visibleTools), [visibleTools]);
+  const hiddenPersonalConnectionCount = useMemo(() => {
+    if (props.toolkit.owner !== "org") return 0;
+    return buildConnectionGroups(props.tools.filter((tool) => toolOwner(tool) === "user")).length;
+  }, [props.toolkit.owner, props.tools]);
   const configuredConnections = useMemo(
     () =>
       configuredConnectionViews(
@@ -1153,6 +1166,7 @@ function ToolkitWorkspace(props: {
         onOpenChange={setAddOpen}
         groups={connectionGroups}
         configuredConnections={configuredConnections}
+        hiddenPersonalConnectionCount={hiddenPersonalConnectionCount}
         integrations={props.integrations}
         integrationPlugins={props.integrationPlugins}
         showOwnerLabels={props.showOwnerLabels}
