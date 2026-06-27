@@ -509,6 +509,38 @@ const makeToolkitsExtension = (ctx: PluginCtx<ToolkitStorage>) => {
       return resolveToolkitPolicy(toolId, connections, policies, defaultRequiresApproval);
     });
 
+  // Batched form of `resolvePolicyForSlug`: fetch the toolkit, its policies, and
+  // its connections ONCE, then hand back a pure resolver core can run for every
+  // tool in a single tools/list or tools/call. `resolvePolicyForSlug` re-fetches
+  // policies + connections on every tool, which is the per-tool N+1 that scales
+  // with the whole catalog on the list surface. This is byte-for-byte the same
+  // resolution, just hoisted out of the loop.
+  const preparePolicyResolverForSlug = (
+    slug: string,
+  ): Effect.Effect<
+    (input: {
+      readonly toolId: string;
+      readonly defaultRequiresApproval?: boolean;
+    }) => EffectivePolicy,
+    StorageFailure
+  > =>
+    Effect.gen(function* () {
+      const toolkit = yield* getBySlugEntry(slug);
+      if (!toolkit) return () => blockedPolicy();
+      const isOrg = toolkit.owner === "org";
+      const policies = yield* listPoliciesForRecord(toolkit.data.id);
+      const connections = yield* listConnectionsForRecord(toolkit.data.id);
+      return (input: { readonly toolId: string; readonly defaultRequiresApproval?: boolean }) => {
+        if (isOrg && isPersonalDynamicToolId(input.toolId)) return blockedPolicy();
+        return resolveToolkitPolicy(
+          input.toolId,
+          connections,
+          policies,
+          input.defaultRequiresApproval,
+        );
+      };
+    });
+
   return {
     list,
     create,
@@ -527,6 +559,7 @@ const makeToolkitsExtension = (ctx: PluginCtx<ToolkitStorage>) => {
     removeConnection,
     policyRulesForSlug,
     resolvePolicyForSlug,
+    preparePolicyResolverForSlug,
   };
 };
 
@@ -638,12 +671,18 @@ const ToolkitsHandlers = HttpApiBuilder.group(ExecutorApiWithToolkits, "toolkits
 );
 
 const makePolicyProvider = (
-  extension: Pick<ToolkitsExtension, "policyRulesForSlug" | "resolvePolicyForSlug">,
+  extension: Pick<
+    ToolkitsExtension,
+    "policyRulesForSlug" | "resolvePolicyForSlug" | "preparePolicyResolverForSlug"
+  >,
   slug: string,
 ): ToolPolicyProvider => ({
   list: () => extension.policyRulesForSlug(slug),
   resolve: ({ toolId, defaultRequiresApproval }) =>
     extension.resolvePolicyForSlug(slug, toolId, defaultRequiresApproval),
+  // Preferred path: core calls this once per operation, so the toolkit's
+  // policies + connections are fetched once instead of once per tool.
+  prepare: () => extension.preparePolicyResolverForSlug(slug),
 });
 
 export const toolkitsPlugin = definePlugin((options: ToolkitsPluginOptions = {}) => {

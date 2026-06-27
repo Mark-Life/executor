@@ -2442,6 +2442,13 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           readonly kind: "provider";
           readonly provider: ToolPolicyProvider;
           readonly rules: readonly ToolPolicyProviderRule[] | null;
+        }
+      | {
+          readonly kind: "prepared";
+          readonly resolve: (input: {
+            readonly toolId: string;
+            readonly defaultRequiresApproval?: boolean;
+          }) => EffectivePolicy;
         };
 
     const compareProviderPolicyRule = (
@@ -2477,19 +2484,26 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
 
     const listActivePolicyRuleSet = (): Effect.Effect<ActivePolicyRuleSet, StorageFailure> =>
       activeToolPolicyProvider
-        ? activeToolPolicyProvider.resolve
-          ? Effect.succeed({
-              kind: "provider" as const,
-              provider: activeToolPolicyProvider,
-              rules: null,
-            })
-          : activeToolPolicyProvider.list().pipe(
-              Effect.map((rules) => ({
+        ? // Batched per-operation resolver: fetch all policy + connection state
+          // once, then resolve every tool in this operation against that
+          // snapshot. Avoids the per-tool resolve N+1 on the list surface.
+          activeToolPolicyProvider.prepare
+          ? activeToolPolicyProvider
+              .prepare()
+              .pipe(Effect.map((resolve) => ({ kind: "prepared" as const, resolve })))
+          : activeToolPolicyProvider.resolve
+            ? Effect.succeed({
                 kind: "provider" as const,
-                provider: activeToolPolicyProvider!,
-                rules,
-              })),
-            )
+                provider: activeToolPolicyProvider,
+                rules: null,
+              })
+            : activeToolPolicyProvider.list().pipe(
+                Effect.map((rules) => ({
+                  kind: "provider" as const,
+                  provider: activeToolPolicyProvider!,
+                  rules,
+                })),
+              )
         : core
             .findMany("tool_policy", {})
             .pipe(Effect.map((rows) => ({ kind: "global" as const, rows })));
@@ -2499,13 +2513,20 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
       ruleSet: ActivePolicyRuleSet,
       defaultRequiresApproval?: boolean,
     ): Effect.Effect<EffectivePolicy, StorageFailure> =>
-      ruleSet.kind === "provider"
-        ? ruleSet.provider.resolve
-          ? ruleSet.provider.resolve({ toolId, defaultRequiresApproval })
-          : Effect.succeed(resolveProviderPolicyFromRules(toolId, ruleSet.rules ?? []))
-        : Effect.succeed(
-            resolveEffectivePolicy(toolId, ruleSet.rows, ownerRankForRow, defaultRequiresApproval),
-          );
+      ruleSet.kind === "prepared"
+        ? Effect.succeed(ruleSet.resolve({ toolId, defaultRequiresApproval }))
+        : ruleSet.kind === "provider"
+          ? ruleSet.provider.resolve
+            ? ruleSet.provider.resolve({ toolId, defaultRequiresApproval })
+            : Effect.succeed(resolveProviderPolicyFromRules(toolId, ruleSet.rules ?? []))
+          : Effect.succeed(
+              resolveEffectivePolicy(
+                toolId,
+                ruleSet.rows,
+                ownerRankForRow,
+                defaultRequiresApproval,
+              ),
+            );
 
     // ------------------------------------------------------------------
     // Tools (read surface)

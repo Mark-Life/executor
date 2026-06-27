@@ -111,6 +111,26 @@ export interface ToolPolicyProvider {
     readonly toolId: string;
     readonly defaultRequiresApproval?: boolean;
   }) => Effect.Effect<EffectivePolicy, StorageFailure>;
+  /**
+   * Batched per-operation resolver. When defined, core calls `prepare` once at
+   * the start of an operation (a single tools/list or tools/call), fetching all
+   * the underlying policy + connection state in one pass, and reuses the
+   * returned pure resolver for every tool in that operation. This avoids the
+   * per-tool `resolve` N+1 (2 uncached storage reads per tool) that scales with
+   * the total catalog size on `toolsList`.
+   *
+   * The resolver is intentionally per-operation scoped, not memoized on the
+   * provider: the provider instance is session-scoped (lives across many
+   * requests), so caching on it would serve stale policy state. Each operation
+   * gets a fresh snapshot.
+   */
+  readonly prepare?: () => Effect.Effect<
+    (input: {
+      readonly toolId: string;
+      readonly defaultRequiresApproval?: boolean;
+    }) => EffectivePolicy,
+    StorageFailure
+  >;
 }
 
 // ---------------------------------------------------------------------------
