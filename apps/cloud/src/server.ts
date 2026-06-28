@@ -1,3 +1,4 @@
+import { DurableObject } from "cloudflare:workers";
 import { SpanKind, SpanStatusCode, context, trace } from "@opentelemetry/api";
 import {
   ATTR_HTTP_REQUEST_METHOD,
@@ -45,6 +46,14 @@ export const McpSessionDOSqlite = Sentry.instrumentDurableObjectWithSentry(
   sentryOptions,
   McpSessionDOBase,
 );
+
+// Orphaned placeholder for the original key-value `McpSessionDO` class (migration
+// v1). The live MCP session DO is now `McpSessionDOSqlite` (SQLite); the
+// `MCP_SESSION` binding moved to it. Cloudflare won't delete `McpSessionDO` in the
+// same deploy that moves its binding, so the class is left unbound and is kept
+// exported here only to satisfy the migration. It can be removed in a later deploy
+// (with a `deleted_classes: ["McpSessionDO"]` migration) now that nothing binds it.
+export class McpSessionDO extends DurableObject {}
 
 // ---------------------------------------------------------------------------
 // Worker fetch handler
