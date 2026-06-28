@@ -151,6 +151,9 @@ function isOnePasswordRegistered(
 function PasteCredentialInputs(props: {
   readonly inputs: readonly CredentialInput[];
   readonly singleInput: boolean;
+  /** Force the per-input label even for a single input (env vars name their
+   *  field rather than relying on a generic "value / token" placeholder). */
+  readonly showLabels?: boolean;
   readonly values: Readonly<Record<string, string>>;
   readonly onChange: (values: Record<string, string>) => void;
 }) {
@@ -188,14 +191,20 @@ function PasteCredentialInputs(props: {
     );
   }
 
+  // Past the multi-input grid above, singleInput is always true, so labelled
+  // reduces to showLabels: env vars opt in to naming their single field.
+  const labelled = props.showLabels ?? false;
   return (
     <div className="space-y-2">
       {props.inputs.map((input) => (
         <div key={input.variable} className="space-y-1">
+          {labelled && (
+            <Label className="font-mono text-xs text-muted-foreground">{input.label}</Label>
+          )}
           <Input
             type="password"
             autoComplete="new-password"
-            placeholder="paste the value / token"
+            placeholder={labelled ? "secret value" : "paste the value / token"}
             value={props.values[input.variable] ?? ""}
             onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
               props.onChange({
@@ -282,6 +291,13 @@ function OnePasswordItemSelect(props: {
 function CredentialValueFields(props: {
   readonly inputs: readonly CredentialInput[];
   readonly singleInput: boolean;
+  readonly showLabels?: boolean;
+  /** Allow an external provider (1Password) origin. Off for env methods: the
+   *  wire's external `from` is keyed under the canonical `token` variable, but
+   *  an env credential must be keyed under its env var name, so a 1Password
+   *  origin would persist the secret under the wrong key and the subprocess
+   *  would launch without it. Paste stays correctly keyed per variable. */
+  readonly allowExternalProvider?: boolean;
   readonly values: Readonly<Record<string, string>>;
   readonly onValuesChange: (values: Record<string, string>) => void;
   readonly origin: CredentialOrigin;
@@ -290,7 +306,10 @@ function CredentialValueFields(props: {
   readonly onOnePasswordItemIdChange: (value: string) => void;
 }) {
   const providers = useAtomValue(providersAtom);
-  const onePasswordAvailable = props.singleInput && isOnePasswordRegistered(providers);
+  const onePasswordAvailable =
+    props.singleInput &&
+    (props.allowExternalProvider ?? true) &&
+    isOnePasswordRegistered(providers);
 
   return (
     <div className="space-y-3">
@@ -326,6 +345,7 @@ function CredentialValueFields(props: {
         <PasteCredentialInputs
           inputs={props.inputs}
           singleInput={props.singleInput}
+          showLabels={props.showLabels}
           values={props.values}
           onChange={props.onValuesChange}
         />
@@ -855,6 +875,13 @@ function AddAccountModalView(props: AddAccountModalProps) {
     }));
   }, [method]);
   const singleInput = credentialInputs.length <= 1;
+  // A stdio env method: every credential is injected as an environment variable
+  // (carrier "env"). These read as named secrets, not an HTTP placement, so we
+  // skip the `KEY=••••••` placement preview and label each field by its var.
+  const isEnvMethod =
+    method != null &&
+    method.placements.length > 0 &&
+    method.placements.every((p) => p.carrier === "env");
   // DCR-capable: the integration advertises dynamic registration (MCP oauth2),
   // OR carries a discovery URL we can probe at connect time. When DCR-capable
   // and not yet fallen back, we skip the app picker entirely (Option A).
@@ -1427,13 +1454,18 @@ function AddAccountModalView(props: AddAccountModalProps) {
                       value={methodId}
                       className="mt-0 min-w-0 space-y-5 rounded-md border border-border/60 bg-muted/15 p-4"
                     >
-                      {method?.placements && method.placements.length > 0 && singleInput ? (
-                        <div className="flex flex-wrap gap-x-3.5 gap-y-1">
-                          {method.placements.map((placement, i: number) => (
-                            <PlacementLine key={i} placement={placement} />
-                          ))}
-                        </div>
-                      ) : null}
+                      {method?.placements && !isEnvMethod && singleInput
+                        ? (() => {
+                            const shown = method.placements.filter((p) => p.carrier !== "env");
+                            return shown.length > 0 ? (
+                              <div className="flex flex-wrap gap-x-3.5 gap-y-1">
+                                {shown.map((placement, i: number) => (
+                                  <PlacementLine key={i} placement={placement} />
+                                ))}
+                              </div>
+                            ) : null;
+                          })()
+                        : null}
 
                       {!isNoAuth && (
                         <div className="space-y-2">
@@ -1540,6 +1572,8 @@ function AddAccountModalView(props: AddAccountModalProps) {
                             <CredentialValueFields
                               inputs={credentialInputs}
                               singleInput={singleInput}
+                              showLabels={isEnvMethod}
+                              allowExternalProvider={!isEnvMethod}
                               values={values}
                               onValuesChange={setValues}
                               origin={credentialOrigin}
