@@ -24,10 +24,24 @@
       },
     ],
   },
+  // The MCP session DO moved to the Cloudflare Agents (`McpAgent`) base, which
+  // stores state in SQLite. `McpSessionDO` was originally created with the
+  // key-value backend (`new_classes`), and Cloudflare cannot convert a live class
+  // to SQLite in place. Session state is ephemeral, so v2 deletes the KV class and
+  // v3 recreates the same name on the SQLite backend. Keeping the name avoids any
+  // binding/export rename.
   "migrations": [
     {
       "tag": "v1",
       "new_classes": ["McpSessionDO"],
+    },
+    {
+      "tag": "v2",
+      "deleted_classes": ["McpSessionDO"],
+    },
+    {
+      "tag": "v3",
+      "new_sqlite_classes": ["McpSessionDO"],
     },
   ],
   "services": [
