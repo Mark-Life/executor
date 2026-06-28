@@ -37,7 +37,9 @@ scenario(
         });
 
         await step("Paste a single-server spec so Add integration is enabled", async () => {
-          await page.getByPlaceholder("https://api.example.com/openapi.json").fill(singleServerSpec);
+          await page
+            .getByPlaceholder("https://api.example.com/openapi.json")
+            .fill(singleServerSpec);
           await page.getByRole("button", { name: "Add integration" }).waitFor({ timeout: 20_000 });
         });
 
@@ -49,22 +51,28 @@ scenario(
           expect(count, "a single Add integration button is rendered").toBe(1);
         });
 
-        await step("Submitting does not reflow the bar, then lands on the integration", async () => {
-          // The reported ghost was the bar painting doubled when the submit
-          // button changed width on click. With a stable-width loading button the
-          // row must not move: Cancel stays put while the add is in flight.
-          const cancel = page.getByRole("button", { name: "Cancel" });
-          const before = await cancel.boundingBox();
-          await page.getByRole("button", { name: "Add integration" }).click();
-          // The submit button marks itself data-loading synchronously on click.
-          await page.locator('[data-slot="button"][data-loading]').first().waitFor({ timeout: 5_000 });
-          const during = await cancel.boundingBox();
-          expect(Math.round(during?.x ?? -1), "Cancel does not move when submitting").toBe(
-            Math.round(before?.x ?? -2),
-          );
-          await page.waitForURL(/\/integrations\/(?!add\b)[^/?]+$/, { timeout: 30_000 });
-          await page.getByText("Connections").first().waitFor();
-        });
+        await step(
+          "Submitting does not reflow the bar, then lands on the integration",
+          async () => {
+            // The reported ghost was the bar painting doubled when the submit
+            // button changed width on click. With a stable-width loading button the
+            // row must not move: Cancel stays put while the add is in flight.
+            const cancel = page.getByRole("button", { name: "Cancel" });
+            const before = await cancel.boundingBox();
+            await page.getByRole("button", { name: "Add integration" }).click();
+            // The submit button marks itself data-loading synchronously on click.
+            await page
+              .locator('[data-slot="button"][data-loading]')
+              .first()
+              .waitFor({ timeout: 5_000 });
+            const during = await cancel.boundingBox();
+            expect(Math.round(during?.x ?? -1), "Cancel does not move when submitting").toBe(
+              Math.round(before?.x ?? -2),
+            );
+            await page.waitForURL(/\/integrations\/(?!add\b)[^/?]+$/, { timeout: 30_000 });
+            await page.getByText("Connections").first().waitFor();
+          },
+        );
 
         await step("The empty connections state renders", async () => {
           await page.getByText("No connections yet").waitFor({ timeout: 20_000 });
@@ -74,9 +82,7 @@ scenario(
           // Regression cover for the doubled-button report: the empty state used
           // to render both a header "Add connection" and a card "Add a
           // connection". Match either label so a regression is actually counted.
-          const count = await page
-            .getByRole("button", { name: /^Add (a )?connection$/i })
-            .count();
+          const count = await page.getByRole("button", { name: /^Add (a )?connection$/i }).count();
           expect(count, "empty state shows exactly one add-connection button").toBe(1);
         });
       });

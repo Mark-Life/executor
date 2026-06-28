@@ -366,9 +366,7 @@ export function AccountsSection(props: {
     trackEvent("connection_add_opened", {
       integration_slug: String(integration),
       has_oauth_method: methods.some((m: AuthMethod) => m.kind === "oauth"),
-      has_api_key_method: methods.some(
-        (m: AuthMethod) => m.kind !== "oauth" && m.kind !== "none",
-      ),
+      has_api_key_method: methods.some((m: AuthMethod) => m.kind !== "oauth" && m.kind !== "none"),
     });
     setAdding(true);
   };
