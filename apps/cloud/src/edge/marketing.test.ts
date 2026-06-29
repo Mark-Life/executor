@@ -18,6 +18,9 @@ describe("isMarketingPath", () => {
     "/llms.txt",
     "/og-image.png",
     "/_astro/app.css",
+    // The blog author card loads its avatar from marketing's public/authors;
+    // without this the pfp 404s on every post.
+    "/authors/rhys-sullivan.png",
   ];
   for (const pathname of marketing) {
     it(`proxies ${pathname} to marketing`, () => {

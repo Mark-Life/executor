@@ -22,6 +22,7 @@ const MARKETING_PATHS = [
   "/llms.txt",
   "/api/detect",
   "/_astro",
+  "/authors",
   "/og-image.png",
   "/pattern-graph-paper.svg",
 ];
