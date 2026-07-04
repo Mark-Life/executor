@@ -15,11 +15,11 @@ import {
   type SessionMeta,
 } from "@executor-js/cloudflare/mcp/agent-durable-object";
 import {
-  mcpSessionDurableObjectName,
   mcpExecutionOwnerDirectoryFromNamespace,
   type McpExecutionOwnerDirectory,
   type McpExecutionOwnerRoute,
 } from "@executor-js/cloudflare/mcp/execution-owner-directory";
+import { mcpSessionStub } from "@executor-js/cloudflare/mcp/session-stub";
 import type { ResumeResponse } from "@executor-js/execution";
 
 import { loadConfig, type CloudflareConfig, type CloudflareEnv } from "../config";
@@ -46,16 +46,6 @@ import { preloadQuickJs } from "../quickjs";
 // The long-lived D1 handle, adapted to the base's `end` contract. D1 owns its
 // own lifecycle (the binding is the connection), so `end` is `close` — a no-op.
 type CfSessionDbHandle = ExecutorDbHandle & { readonly end: () => Promise<void> };
-
-interface McpModelResumeStub {
-  readonly resumeExecutionForModel: (
-    executionId: string,
-    identity: McpApprovalOwner,
-    response: ResumeResponse,
-  ) => Promise<McpSessionModelResumeResult>;
-}
-
-const toMcpModelResumeStub = (stub: unknown): McpModelResumeStub => stub as McpModelResumeStub;
 
 class McpModelResumeForwardError extends Data.TaggedError("McpModelResumeForwardError")<{
   readonly cause: unknown;
@@ -86,11 +76,11 @@ export class McpSessionDO extends McpAgentSessionDOBase<CloudflareEnv, CfSession
   ): Effect.Effect<McpSessionModelResumeResult, unknown> {
     return Effect.tryPromise({
       try: () =>
-        toMcpModelResumeStub(
-          this.cfEnv.MCP_SESSION.get(
-            this.cfEnv.MCP_SESSION.idFromName(mcpSessionDurableObjectName(owner.sessionId)),
-          ),
-        ).resumeExecutionForModel(executionId, identity, response),
+        mcpSessionStub(this.cfEnv.MCP_SESSION, owner.sessionId).resumeExecutionForModel(
+          executionId,
+          identity,
+          response,
+        ),
       catch: (cause) => new McpModelResumeForwardError({ cause }),
     });
   }

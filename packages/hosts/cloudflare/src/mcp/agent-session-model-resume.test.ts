@@ -32,6 +32,7 @@ import {
   type McpExecutionOwnerRecord,
   type McpExecutionOwnerRoute,
 } from "./execution-owner-directory";
+import { mcpSessionStub } from "./session-stub";
 
 vi.mock("agents/mcp", () => ({
   McpAgent: class {
@@ -467,15 +468,11 @@ describe("McpAgentSessionDOBase cross-session model resume", () => {
         response: ResumeResponse,
       ) =>
         Effect.promise(async () => {
-          const session = sessionNamespace.get(
-            sessionNamespace.idFromName(mcpSessionDurableObjectName(owner.sessionId)),
+          return mcpSessionStub(sessionNamespace, owner.sessionId).resumeExecutionForModel(
+            executionId,
+            identity,
+            response,
           );
-          return session
-            ? session.resumeExecutionForModel(executionId, identity, response)
-            : {
-                status: "execution_expired" as const,
-                ttlMs: PAUSED_APPROVAL_TIMEOUT_MS,
-              };
         }),
     );
 

@@ -36,11 +36,11 @@ import {
   type SessionMeta,
 } from "@executor-js/cloudflare/mcp/agent-durable-object";
 import {
-  mcpSessionDurableObjectName,
   mcpExecutionOwnerDirectoryFromNamespace,
   type McpExecutionOwnerDirectory,
   type McpExecutionOwnerRoute,
 } from "@executor-js/cloudflare/mcp/execution-owner-directory";
+import { mcpSessionStub } from "@executor-js/cloudflare/mcp/session-stub";
 import { buildExecuteDescription, type ResumeResponse } from "@executor-js/execution";
 
 // The DO meters executions just like the HTTP `/api/*` plane: it builds its
@@ -100,16 +100,6 @@ type CloudSessionDbHandle = DbServiceShape & {
   readonly sql: Sql;
   readonly end: () => Promise<void>;
 };
-
-interface McpModelResumeStub {
-  readonly resumeExecutionForModel: (
-    executionId: string,
-    identity: McpApprovalOwner,
-    response: ResumeResponse,
-  ) => Promise<McpSessionModelResumeResult>;
-}
-
-const toMcpModelResumeStub = (stub: unknown): McpModelResumeStub => stub as McpModelResumeStub;
 
 class OrganizationNotFoundError extends Data.TaggedError("OrganizationNotFoundError")<{
   readonly organizationId: string;
@@ -213,11 +203,11 @@ export class McpSessionDOSqlite extends McpAgentSessionDOBase<Env, CloudSessionD
   ): Effect.Effect<McpSessionModelResumeResult, unknown> {
     return Effect.tryPromise({
       try: () =>
-        toMcpModelResumeStub(
-          env.MCP_SESSION.get(
-            env.MCP_SESSION.idFromName(mcpSessionDurableObjectName(owner.sessionId)),
-          ),
-        ).resumeExecutionForModel(executionId, identity, response),
+        mcpSessionStub(env.MCP_SESSION, owner.sessionId).resumeExecutionForModel(
+          executionId,
+          identity,
+          response,
+        ),
       catch: (cause) => new McpModelResumeForwardError({ cause }),
     });
   }
