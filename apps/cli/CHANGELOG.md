@@ -1,5 +1,21 @@
 # executor
 
+## 1.5.30
+
+### Patch Changes
+
+- [#1349](https://github.com/UsefulSoftwareCo/executor/pull/1349) [`a7e3091`](https://github.com/UsefulSoftwareCo/executor/commit/a7e3091a94fbdf032ef134989ceaba4f0b1b3231) Thanks [@RhysSullivan](https://github.com/RhysSullivan)! - Back-stop code execution with a host-side timeout so a wedged sandbox delivers a descriptive error instead of hanging silently.
+
+- [#1345](https://github.com/UsefulSoftwareCo/executor/pull/1345) [`c46730b`](https://github.com/UsefulSoftwareCo/executor/commit/c46730b5d48cc62dae1abdbe32136f3c229d79f6) Thanks [@RhysSullivan](https://github.com/RhysSullivan)! - Preserve MCP tool results across dropped streamable HTTP SSE connections.
+
+- [#1352](https://github.com/UsefulSoftwareCo/executor/pull/1352) [`8bdf315`](https://github.com/UsefulSoftwareCo/executor/commit/8bdf31550f702e6bce6c3460bb9d26fcce925d7b) Thanks [@RhysSullivan](https://github.com/RhysSullivan)! - Treat a transient WorkOS outage during the MCP live-membership check as a retryable 503 instead of a Forbidden that destroys the session.
+
+- Updated dependencies []:
+  - @executor-js/sdk@1.5.30
+  - @executor-js/runtime-quickjs@1.5.30
+  - @executor-js/local@1.4.4
+  - @executor-js/api@1.4.50
+
 ## 1.5.29
 
 ### Patch Changes
